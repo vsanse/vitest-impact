@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { budgetResources } from '../src/resources.js'
+import { availableMemoryBytes, budgetResources } from '../src/resources.js'
 import { parseConfig } from '../src/config.js'
 import { parseNameStatus } from '../src/git.js'
 
@@ -24,4 +24,11 @@ test('Git parsing preserves filenames containing whitespace', () => {
   expect(parseNameStatus('M\0src/with space.ts\0D\0src/with\nnewline.ts\0')).toEqual([
     { status: 'M', path: 'src/with space.ts' }, { status: 'D', path: 'src/with\nnewline.ts' },
   ])
+})
+
+test('macOS counts total memory, because its free figure leaves out reclaimable cache', () => {
+  const MB = 1024 * 1024
+  expect(availableMemoryBytes({ platform: 'darwin', freeBytes: 150 * MB, processAvailableBytes: 150 * MB, totalBytes: 16384 * MB, cgroupMaxBytes: null, cgroupUsedBytes: null })).toBe(16384 * MB)
+  expect(availableMemoryBytes({ platform: 'linux', freeBytes: 4000 * MB, processAvailableBytes: 3000 * MB, totalBytes: 8192 * MB, cgroupMaxBytes: null, cgroupUsedBytes: null })).toBe(3000 * MB)
+  expect(availableMemoryBytes({ platform: 'linux', freeBytes: 4000 * MB, processAvailableBytes: null, totalBytes: 8192 * MB, cgroupMaxBytes: 2048 * MB, cgroupUsedBytes: 1024 * MB })).toBe(1024 * MB)
 })

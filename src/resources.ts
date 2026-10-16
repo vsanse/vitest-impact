@@ -1,8 +1,24 @@
-import { availableParallelism, freemem } from 'node:os'
+import { availableParallelism, freemem, totalmem } from 'node:os'
 import { readFileSync } from 'node:fs'
 import type { ImpactConfig, ResourceBudget } from './types.js'
 
 export interface HostCapacity { cpu: number; availableMemoryMb: number }
+export interface MemoryInput {
+  platform: NodeJS.Platform
+  freeBytes: number
+  processAvailableBytes: number | null
+  totalBytes: number
+  cgroupMaxBytes: number | null
+  cgroupUsedBytes: number | null
+}
+export function availableMemoryBytes(input: MemoryInput): number {
+  // ponytail: macOS freemem leaves out reclaimable cache, so total memory stands in; parse vm_stat if admission control ever matters on macOS.
+  let memory = input.platform === 'darwin' ? input.totalBytes : Math.min(input.processAvailableBytes ?? input.freeBytes, input.freeBytes)
+  const { cgroupMaxBytes: max, cgroupUsedBytes: used } = input
+  if (max !== null && used !== null && Number.isFinite(max) && Number.isFinite(used) && max > 0) memory = Math.min(memory, Math.max(0, max - used))
+  return memory
+}
+
 export function detectCapacity(): HostCapacity {
   let cpu = availableParallelism()
   // Linux quotas can be smaller than the affinity reported by Node/libuv.
@@ -10,13 +26,20 @@ export function detectCapacity(): HostCapacity {
     const [quota, period] = readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim().split(/\s+/)
     if (quota !== 'max' && Number(quota) > 0 && Number(period) > 0) cpu = Math.min(cpu, Math.max(1, Math.floor(Number(quota) / Number(period))))
   } catch { /* Portable fallback: Node affinity. */ }
-  const available = typeof process.availableMemory === 'function' ? process.availableMemory() : freemem()
-  let memory = Math.min(available, freemem())
+  let cgroupMaxBytes: number | null = null
+  let cgroupUsedBytes: number | null = null
   try {
-    const max = Number(readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim())
-    const used = Number(readFileSync('/sys/fs/cgroup/memory.current', 'utf8').trim())
-    if (Number.isFinite(max) && Number.isFinite(used) && max > 0) memory = Math.min(memory, Math.max(0, max - used))
-  } catch { /* Portable fallback: Node's available memory. */ }
+    cgroupMaxBytes = Number(readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim())
+    cgroupUsedBytes = Number(readFileSync('/sys/fs/cgroup/memory.current', 'utf8').trim())
+  } catch { /* Portable fallback: no cgroup limit. */ }
+  const memory = availableMemoryBytes({
+    platform: process.platform,
+    freeBytes: freemem(),
+    processAvailableBytes: typeof process.availableMemory === 'function' ? process.availableMemory() : null,
+    totalBytes: totalmem(),
+    cgroupMaxBytes,
+    cgroupUsedBytes,
+  })
   return { cpu, availableMemoryMb: Math.floor(memory / 1024 / 1024) }
 }
 
