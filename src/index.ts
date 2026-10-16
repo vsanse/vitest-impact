@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { VitestAdapter } from './adapter.js'
 import { loadConfig } from './config.js'
@@ -32,6 +33,8 @@ export interface Options {
   /** Treat the config's `isolated` list as empty (used by `check`). */
   ignoreIsolated?: boolean
 }
+
+const TOOL_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version
 
 export async function execute(options: Options): Promise<{ plan: Plan; report?: RunReport }> {
   const root = resolve(options.root ?? process.cwd())
@@ -85,7 +88,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     const selectedCount = selection.decisions.filter(t => t.selected).length
     selection.mode = selectedCount === selection.decisions.length ? 'full' : selectedCount ? 'selective' : 'empty'
     const plan: Plan = {
-      schemaVersion: 1, toolVersion: '0.2.0', vitestVersion: adapter?.version ?? 'n/a',
+      schemaVersion: 1, toolVersion: TOOL_VERSION, vitestVersion: adapter?.version ?? 'n/a',
       nodeVersion: process.version, root, createdAt: new Date().toISOString(), git,
       configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection,
       packages: packages?.map(p => p.name) ?? [], separate,
@@ -96,7 +99,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
         'Selection assumes sourcePatterns use statically resolvable dependencies; declare other inputs or force a full run.',
         'Untracked ignored files, external services, and environment drift across revisions are not inferred.',
         'Git ancestry is checked; successful validation of the chosen base is not verified.',
-        'This MVP has no historical graph or result cache. Deletions and unknown inputs broaden execution.',
+        'No dependency records are kept between runs yet. Deletions and unknown inputs broaden execution.',
         ...resources.warnings,
       ],
     }

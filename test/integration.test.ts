@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from 'vitest'
-import { rm } from 'node:fs/promises'
+import { readFile, rm } from 'node:fs/promises'
 import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
-import { makeFixture, put, invoke, git } from '../scripts/fixture.mjs'
+import { makeFixture, put, invoke, git, projectRoot } from '../scripts/fixture.mjs'
 
 const cleanups: (() => Promise<void>)[] = []
 async function fixture(options = {}) {
@@ -221,4 +221,13 @@ test('a root Vitest config with several projects is refused with a message that 
   const run = await invoke(root, ['plan', '--vitest-config', 'vitest.config.ts'])
   expect(run.code).toBe(2)
   expect(run.output).toContain('A root Vitest config with several projects (test.projects) is not supported yet.')
+})
+
+test('the plan carries the package version and no outdated cache warning', async () => {
+  const { root } = await fixture()
+  const run = await invoke(root, ['plan'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.plan.toolVersion).toBe(JSON.parse(await readFile(resolve(projectRoot, 'package.json'), 'utf8')).version)
+  expect(run.plan.warnings.join(' ')).not.toContain('result cache')
+  expect(run.plan.warnings).toContain('No dependency records are kept between runs yet. Deletions and unknown inputs broaden execution.')
 })
