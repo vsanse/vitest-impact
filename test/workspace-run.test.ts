@@ -411,3 +411,23 @@ test('shared, separate and script units see the environment they get without the
   ])
   expect(run.report.packages.find(p => p.name === '@w/e')).toMatchObject({ mode: 'script', exitCode: 0 })
 })
+
+test('under --shard a package with its own coverage runs whole in exactly one shard', async () => {
+  const provider = "export default { getProvider: () => { let ctx; return { name: 'fixture', initialize(c) { ctx = c }, resolveOptions: () => ctx.config.coverage, clean() {}, onAfterSuiteRun() {}, generateCoverage: () => ({}), reportCoverage() {} } } }\n"
+  const extra: Record<string, string> = {
+    'packages/b/vitest.config.ts': config("coverage: { enabled: true, provider: 'custom', customProviderModule: './cov.mjs' }"),
+    'packages/b/cov.mjs': provider,
+  }
+  for (let i = 0; i < 3; i++) extra[`packages/b/test/more${i}.test.ts`] = `import { test } from 'vitest'; test('more ${i}', () => {})\n`
+  const { root } = await workspaceFixture({ packages: extra })
+  const perShard: string[][] = []
+  for (const i of [1, 2, 3]) {
+    const run = await invoke(root, ['run', '--mode', 'full', '--shard', `${i}/3`], 60_000)
+    expect(run.code, run.output).toBe(0)
+    expect(run.report.missingFiles).toEqual([])
+    expect(run.report.unexpectedFiles).toEqual([])
+    perShard.push(run.report.executed.filter(t => t.project === '@w/b').map(t => t.file))
+  }
+  expect(perShard.filter(files => files.length)).toHaveLength(1)
+  expect(perShard.flat()).toHaveLength(6)
+})

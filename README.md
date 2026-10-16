@@ -35,7 +35,7 @@ vitest-impact check [--filter TOKEN] [--write]
 | `--base REF` | An ancestor revision. Without a valid base the full set runs. |
 | `--mode` | `shadow` (default): select, then run everything. `selected`: run only the selection. `full`: run everything, no selection. Only for `run`. |
 | `--filter TOKEN` | Repeatable. Only an exact package name or `./<folder glob>` is supported. `!` excludes. A positive token that matches no package is an error; a negated token that matches nothing is not. Needs a workspace. |
-| `--shard i/n` | Run the i-th of n shares of the planned files (Vitest packages, shared or separate, by file; script packages by package name). An empty shard still writes its report. |
+| `--shard i/n` | Run the i-th of n shares of the planned files (Vitest packages, shared or separate, by file; script packages and packages with their own coverage by package name, so each of those runs whole in one shard). An empty shard still writes its report. |
 | `--max-workers N`, `--memory-mb N`, `--worker-memory-mb N`, `--reserve-memory-mb N` | Resource budget (see below). |
 | `--write` | Only for `check`: record candidates in the config's `isolated` list. |
 
@@ -73,7 +73,7 @@ A Vitest package runs in its own Vitest process, with its own settings, when the
 | `typecheck` | Typecheck is enabled. |
 | `file-parallelism-off` | `fileParallelism: false` is a per-package setting. |
 | `global-setup` | `globalSetup` runs in the main process and sees the repo root. |
-| `coverage` | Coverage is on in the package config. The package runs alone, in full, with its own thresholds. |
+| `coverage` | Coverage is on in the package config. The package runs alone, in full (under `--shard`, whole in one shard), with its own thresholds. |
 | `fs-module-cache-off` | The package sets `fsModuleCache: false`, which a shared run cannot honor for one package only. |
 
 A separate package keeps its own result: if its process exits non-zero, the run exits 1, even if every test passed (coverage thresholds, unhandled errors). Separate units run one after another.
@@ -120,7 +120,7 @@ See [`examples/consumer-workflow.yml`](examples/consumer-workflow.yml).
 
 ## Report and exit codes
 
-`plan` deletes the old `report.json` and `summary.md` and writes only `plan.json`. A `run` replaces all three files in `.vitest-impact/`: `plan.json` (decisions and reasons, separate units, script packages, empty packages, resources, warnings), `report.json`, and `summary.md` (also appended to `GITHUB_STEP_SUMMARY` when set). Plans do not hold source contents or environment values.
+`plan` deletes the old `report.json` and `summary.md` and writes only `plan.json`. A `run` replaces all three files in `.vitest-impact/`: `plan.json` (decisions and reasons, separate units, script packages, coverage packages, empty packages, resources, warnings), `report.json`, and `summary.md` (also appended to `GITHUB_STEP_SUMMARY` when set). Plans do not hold source contents or environment values.
 
 The report holds:
 
@@ -138,7 +138,7 @@ Each run takes `.vitest-impact/run.lock`. Run one at a time per checkout. After 
 
 Config keys (`vitest-impact.config.json`): `sourcePatterns`, `inputs` (`{ files, tests }` rules for files tests read without importing), `forceFull`, `ignore`, `alwaysRun`, `isolated`, `resources`. Globs are positive, repository-relative POSIX paths. `init` starts with empty lists, so unclassified changes run the full set until you declare ownership. `ignore` is your assertion that a path cannot affect tests; a wrong rule can hide a failure, which shadow mode helps expose.
 
-The selection uses Git changes from `--base` to the working tree (committed, staged, unstaged and non-ignored untracked files) and Vitest's own related-test analysis. It runs the **full set** for: `--mode full`, no impact config file (`no-impact-config`), no `--base` (`missing-base`), no git or an invalid or non-ancestor base (`git-unavailable-or-invalid-base`), deleted or type-changed files, unknown paths, protected files (configs, lockfiles, environment files), an empty native selection for changed source, an `inputs` rule whose tests match no test file (`input-rule-has-no-tests`), coverage turned on, an untested Vitest version, and any known selection error. Changed tests and `alwaysRun` tests always run. An `alwaysRun` pattern that matches no test is a configuration error (exit 2). With coverage on, selection is off for that package and it runs in full.
+The selection uses Git changes from `--base` to the working tree (committed, staged, unstaged and non-ignored untracked files) and Vitest's own related-test analysis. It runs the **full set** for: `--mode full`, no impact config file (`no-impact-config`), no `--base` (`missing-base`), no git or an invalid or non-ancestor base (`git-unavailable-or-invalid-base`), deleted or type-changed files, unknown paths, protected files (configs, lockfiles, environment files), an empty native selection for changed source, an `inputs` rule whose tests match no test file (`input-rule-has-no-tests`), coverage turned on, an untested Vitest version, and any known selection error. Changed tests and `alwaysRun` tests always run. An `alwaysRun` pattern that matches no test is a configuration error (exit 2). With coverage on, selection is off for that package and it runs in full, also under `--shard` (`plan.coveragePackages`).
 
 ### What it guarantees, and what it does not
 

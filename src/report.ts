@@ -7,7 +7,7 @@ import type { FileResult, LoadSummary, PackageResult, Phases, Plan, RunReport } 
 export function analyzeRun(plan: Plan, mode: RunReport['mode'], executed: FileResult[], unhandledErrors: string[], executionMs: number, runLevelFailure = false, packages?: PackageResult[], load?: LoadSummary | null): RunReport {
   const selected = new Set(plan.decisions.filter(t => t.selected).map(t => t.id))
   const { shard } = plan
-  const expected = new Set(shardRunSet(plan.decisions, mode, shard).map(t => t.id))
+  const expected = new Set(shardRunSet(plan.decisions, mode, shard, plan.coveragePackages).map(t => t.id))
   const observed = new Set(executed.map(t => t.id))
   const missingFiles = plan.decisions.filter(t => expected.has(t.id) && !observed.has(t.id)).map(t => t.file)
   const unexpectedFiles = executed.filter(t => !expected.has(t.id)).map(t => t.file)

@@ -83,7 +83,8 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
       nodeVersion: process.version, root, createdAt: new Date().toISOString(), git,
       configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection,
       packages: packages?.map(p => p.name) ?? [], separate,
-      scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], emptyPackages: adapter?.emptyPackages ?? [], shard, resources,
+      scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], coveragePackages: [...coveragePackages].sort(),
+      emptyPackages: adapter?.emptyPackages ?? [], shard, resources,
       planningMs: performance.now() - start,
       warnings: [
         'Selection assumes sourcePatterns use statically resolvable dependencies; declare other inputs or force a full run.',
@@ -102,7 +103,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     await writeJson(resolve(output, 'plan.json'), plan)
     if (options.command === 'plan') return { plan }
     const mode = options.mode ?? 'shadow'
-    const runSet = shardRunSet(plan.decisions, mode, shard)
+    const runSet = shardRunSet(plan.decisions, mode, shard, plan.coveragePackages)
     const inRun = new Set(runSet.map(t => t.id))
     const wanted = (t: { id: string }) => inRun.has(t.id)
     const ids = inRun

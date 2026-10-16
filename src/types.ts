@@ -58,6 +58,8 @@ export interface Plan {
   separate: { package: string; reason: string }[]
   /** Packages whose test script runs as-is. */
   scripts: string[]
+  /** Packages whose own config enables coverage: they run in full, and under --shard in one shard. */
+  coveragePackages: string[]
   /** Vitest packages with no test files whose config sets passWithNoTests; left out of the run. */
   emptyPackages: string[]
   /** The `--shard i/n` this invocation runs, or null. */

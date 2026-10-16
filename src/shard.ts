@@ -24,13 +24,18 @@ export function shardOfName(name: string, count: number): number {
 
 type Shard = { index: number; count: number } | null | undefined
 
-/** The files this invocation runs: the mode's run set (all, or only the selected), then this shard's slice of it. */
-export function shardRunSet<T extends { file: string; selected: boolean }>(decisions: T[], mode: 'shadow' | 'selected' | 'full', shard: Shard): T[] {
+/**
+ * The files this invocation runs: the mode's run set (all, or only the selected), then this shard's slice of it.
+ * Packages in `whole` (own coverage, so their thresholds see every file) go to one shard by name, like scripts.
+ */
+export function shardRunSet<T extends { file: string; project: string; selected: boolean }>(decisions: T[], mode: 'shadow' | 'selected' | 'full', shard: Shard, whole: string[] = []): T[] {
   const set = decisions.filter(t => mode !== 'selected' || t.selected)
-  return shard ? shardFiles(set, shard.index, shard.count) : set
+  if (!shard) return set
+  const split = set.filter(t => !whole.includes(t.project))
+  return [...shardFiles(split, shard.index, shard.count), ...set.filter(t => whole.includes(t.project) && scriptInShard(t.project, shard))]
 }
 
-/** A script unit runs in exactly one shard. */
+/** A script unit (or a whole package) runs in exactly one shard. */
 export function scriptInShard(name: string, shard: Shard): boolean {
   return !shard || shardOfName(name, shard.count) === shard.index
 }
