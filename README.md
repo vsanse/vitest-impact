@@ -35,7 +35,7 @@ vitest-impact check [--filter TOKEN] [--write]
 | `--base REF` | An ancestor revision. Without a valid base the full set runs. |
 | `--mode` | `shadow` (default): select, then run everything. `selected`: run only the selection. `full`: run everything, no selection. Only for `run`. |
 | `--filter TOKEN` | Repeatable. Only an exact package name or `./<folder glob>` is supported. `!` excludes. A positive token that matches no package is an error; a negated token that matches nothing is not. Needs a workspace. |
-| `--shard i/n` | Run the i-th of n shares of the planned files (one-process packages by file; script packages by package name). An empty shard still writes its report. |
+| `--shard i/n` | Run the i-th of n shares of the planned files (Vitest packages, shared or separate, by file; script packages by package name). An empty shard still writes its report. |
 | `--max-workers N`, `--memory-mb N`, `--worker-memory-mb N`, `--reserve-memory-mb N` | Resource budget (see below). |
 | `--write` | Only for `check`: record candidates in the config's `isolated` list. |
 
@@ -49,13 +49,13 @@ npx vitest-impact run --base "$IMPACT_BASE" --mode shadow --filter '!./tools/*'
 
 ## Workspace mode
 
-If the root has a `pnpm-workspace.yaml` (its `packages:` list) or a `package.json` `workspaces` field, the tool finds the packages and runs their Vitest tests in one process. `pnpm-workspace.yaml` wins when both exist. Without a workspace, the tool runs the single project as before.
+If the root has a `pnpm-workspace.yaml` (its `packages:` list) or a `package.json` `workspaces` field, the tool finds the packages and runs their Vitest tests in one process. `pnpm-workspace.yaml` wins when both exist. Without a workspace, the tool runs the single project as before; that mode still accepts the `threads` pool (only workspace mode separates it).
 
 - The root package's own `test` script is never run.
-- A package is a **Vitest package** when its `test` script is exactly `vitest` or `vitest run` and it has a `vitest.config.*` or `vite.config.*` file. A package with any other `test` script (for example lint, then Vitest) is a **script package**: its script runs as it is, in its own process, through the repository's package manager. A package with no `test` script is left out.
+- A package is a **Vitest package** when its `test` script is exactly `vitest` or `vitest run` and it has a `vitest.config.*` or `vite.config.*` file. A package with any other `test` script (for example lint, then Vitest), or with that script but no config file, is a **script package**: its script runs as it is, in its own process, through the repository's package manager. A package with no `test` script is left out.
 - No root Vitest config is used in workspace mode. A root-level shared config is ignored. Settings Vitest reads only from the root (for example `reporters`) come from the tool.
 - A package that fails to parse, an empty filter result, or a Vitest package with no test files (unless its config sets `passWithNoTests: true`) is an error (exit 2). A package with `passWithNoTests: true` and no test files is left out and listed as `emptyPackages` in the plan.
-- `process.cwd()` in a package's tests is the package folder, as with `vitest run` inside that folder. It works with the `forks` pool (a shim calls `process.chdir`), including `isolate: false` and `vmForks`. See [docs/decisions/cwd-parity.md](docs/decisions/cwd-parity.md).
+- `process.cwd()` in a package's tests is the package folder, as with `vitest run` inside that folder. It works in the shared process, which uses only the `forks` pool (a shim calls `process.chdir`), including `isolate: false`. Any other pool runs separately (see below). The shim was also shown to work with `vmForks`, but the tool separates that pool by policy. See [docs/decisions/cwd-parity.md](docs/decisions/cwd-parity.md).
 
 **Known gaps of the working-folder guarantee:** the package config file is loaded with the repo root as the working folder, and Vite plugins run in the main process, so code in either that calls `process.cwd()` sees the repo root. A package with `globalSetup` runs separately, because global setup also sees the repo root.
 
@@ -66,7 +66,7 @@ A Vitest package runs in its own Vitest process, with its own settings, when the
 | Reason | Why it cannot share the process |
 | --- | --- |
 | `isolated-in-config` | The package is in the config's `isolated` list. |
-| `pool:<name>` | The pool is not `forks` (for example `threads`, which cannot `chdir`, or `vmForks`). |
+| `pool:<name>` | The pool is not `forks`. Only `forks` shares the process: `threads` cannot `chdir`, and `vmForks` is separated by policy. |
 | `browser` | Browser mode. |
 | `typecheck` | Typecheck is enabled. |
 | `file-parallelism-off` | `fileParallelism: false` is a per-package setting. |
@@ -84,7 +84,7 @@ Some packages pass alone but fail when sharing a process (shared module state, p
 { "version": 1, "isolated": ["@acme/legacy-api"] }
 ```
 
-`vitest-impact check` finds them. It runs every Vitest package that has no structural reason to run apart in the shared process (ignoring the current `isolated` list), then runs each failing package alone. A package that fails shared but passes alone is a candidate. A package that also fails alone is a real failure (exit 1). `check --write` merges the candidates into `isolated` (sorted, no duplicates, all other keys kept). Commit the config. In CI a listed package runs in its own process from the start. The tool never reruns a failed package to turn it into a pass.
+`vitest-impact check` finds them. It runs every discovered package: Vitest packages with no structural reason to run apart go in the shared process (ignoring the current `isolated` list), and each package that fails there is rerun alone. Structural-separate and script packages run alone, and a non-zero exit there is a real failure. A package that fails shared but passes alone is a candidate. A package that also fails alone is a real failure (exit 1). `check` ignores `--max-workers` and the other resource flags; it uses the config's `resources`. `check --write` merges the candidates into `isolated` (sorted, no duplicates, all other keys kept). Commit the config. In CI a listed package runs in its own process from the start. The tool never turns a failure into a pass.
 
 `check` overwrites `.vitest-impact/plan.json`, `report.json` and `summary.md`, because it is a run too.
 
@@ -118,13 +118,13 @@ See [`examples/consumer-workflow.yml`](examples/consumer-workflow.yml).
 
 ## Report and exit codes
 
-Each run replaces these files in `.vitest-impact/`: `plan.json` (decisions and reasons, separate units, script packages, empty packages, resources, warnings), `report.json`, and `summary.md` (also appended to `GITHUB_STEP_SUMMARY` when set). Plans do not hold source contents or environment values.
+`plan` deletes the old `report.json` and `summary.md` and writes only `plan.json`. A `run` replaces all three files in `.vitest-impact/`: `plan.json` (decisions and reasons, separate units, script packages, empty packages, resources, warnings), `report.json`, and `summary.md` (also appended to `GITHUB_STEP_SUMMARY` when set). Plans do not hold source contents or environment values.
 
 The report holds:
 
-- **Time per package and phase.** For one-process packages, phases are summed over files; for separate units no phase data exists, only wall time. Phases map to Vitest's own Duration line like this: the tool's `import` is Vitest's "import" plus the separate "transform" wait, and `setup` includes Vitest's "worker" time (so these two do not equal Vitest's numbers one by one). `environment` and `tests` match Vitest's.
+- **Time per package and phase.** For one-process packages, phases are summed over files; for separate units no phase data exists, only wall time. Phases map to Vitest's own Duration line like this: the tool's `import` is Vitest's collect time, so it includes the collect part of Vitest's separate "transform" wait. The tool's `setup` is Vitest's setup plus its "worker" time, so it includes Vitest's "worker" time and the setup part of the "transform" wait. These two do not equal Vitest's numbers one by one. `environment` and `tests` match Vitest's.
 - **Slowest files** (top 10).
-- **Timeouts**: each test or hook that timed out, with the peak and mean load per CPU during the run. A peak above 1 means the machine was overloaded and a timeout may come from that.
+- **Timeouts**: each test or hook that timed out, with the peak and mean load per CPU during the run (`load` is null where the OS gives no load average, such as Windows). A peak above 1 means the machine was overloaded and a timeout may come from that.
 - **Failed separate units**, and units that produced no report.
 - In shadow mode, `missedFailingFiles`, and recall of observed failures. An all-green run reports `no-failures-observed` with `null` recall, never "100% safe".
 
@@ -136,7 +136,7 @@ Each run takes `.vitest-impact/run.lock`. Run one at a time per checkout. After 
 
 Config keys (`vitest-impact.config.json`): `sourcePatterns`, `inputs` (`{ files, tests }` rules for files tests read without importing), `forceFull`, `ignore`, `alwaysRun`, `isolated`, `resources`. Globs are positive, repository-relative POSIX paths. `init` starts with empty lists, so unclassified changes run the full set until you declare ownership. `ignore` is your assertion that a path cannot affect tests; a wrong rule can hide a failure, which shadow mode helps expose.
 
-The selection uses Git changes from `--base` to the working tree (committed, staged, unstaged and non-ignored untracked files) and Vitest's own related-test analysis. It runs the **full set** for: no base, an invalid or non-ancestor base, deleted or type-changed files, unknown paths, protected files (configs, lockfiles, environment files), an empty native selection for changed source, a fixture owner that matches no test, coverage turned on, an untested Vitest version, and any known selection error. Changed tests and `alwaysRun` tests always run. With coverage on, selection is off for that package and it runs in full.
+The selection uses Git changes from `--base` to the working tree (committed, staged, unstaged and non-ignored untracked files) and Vitest's own related-test analysis. It runs the **full set** for: `--mode full`, no impact config file (`no-impact-config`), no `--base` (`missing-base`), no git or an invalid or non-ancestor base (`git-unavailable-or-invalid-base`), deleted or type-changed files, unknown paths, protected files (configs, lockfiles, environment files), an empty native selection for changed source, an `inputs` rule whose tests match no test file (`input-rule-has-no-tests`), coverage turned on, an untested Vitest version, and any known selection error. Changed tests and `alwaysRun` tests always run. An `alwaysRun` pattern that matches no test is a configuration error (exit 2). With coverage on, selection is off for that package and it runs in full.
 
 ### What it guarantees, and what it does not
 
@@ -148,8 +148,12 @@ The selection uses Git changes from `--base` to the working tree (committed, sta
 
 ### Vitest internals it depends on
 
-- `specifications.filterTestsBySource`, a private Vitest method used to get a selection without running. If it is missing or throws, the full set runs.
+- `specifications.filterTestsBySource`, a private method used to get a selection without running. If it is missing or throws, the full set runs.
+- `context.specifications` and `runTestSpecifications`, to run exact test files.
+- Changes to `project.config` after `createVitest`: `maxWorkers`, `env`, `setupFiles`, `allowOnly` and `sequence.groupOrder`.
+- Re-loading each package config through Vite's `loadConfigFromFile`, to read `coverage`, `fsModuleCache` and `passWithNoTests`, which Vitest overrides.
 - `config.providedOptions`, an untyped field used to see whether a package set its own `maxWorkers`. If it is missing, the lower value is kept.
+- `process.exitCode`, read as the run-level failure signal.
 
 An unsupported major version is rejected before any run. These are the main compatibility risk and the reason for the exact tested version.
 

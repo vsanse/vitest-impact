@@ -54,7 +54,7 @@ export function markdownSummary(report: RunReport): string {
   const units = (report.packages ?? []).filter(p => p.mode !== 'shared')
     .map(p => ({ ...p, noReport: p.mode === 'separate' && !report.executed.some(t => t.project === p.name) }))
     .filter(p => p.exitCode !== 0 || p.noReport)
-  return `\n### Vitest Impact — ${report.mode}\n\n` +
+  return `\n### Vitest Impact: ${report.mode}\n\n` +
     `| Metric | Result |\n| --- | --- |\n` +
     `| Planned files | ${selected} / ${report.plan.decisions.length} |\n` +
     `| Executed files | ${report.executed.length} |\n` +
