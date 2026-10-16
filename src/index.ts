@@ -79,7 +79,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     const selectedCount = selection.decisions.filter(t => t.selected).length
     selection.mode = selectedCount === selection.decisions.length ? 'full' : selectedCount ? 'selective' : 'empty'
     const plan: Plan = {
-      schemaVersion: 1, toolVersion: '0.1.0', vitestVersion: adapter?.version ?? 'n/a',
+      schemaVersion: 1, toolVersion: '0.2.0', vitestVersion: adapter?.version ?? 'n/a',
       nodeVersion: process.version, root, createdAt: new Date().toISOString(), git,
       configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection,
       packages: packages?.map(p => p.name) ?? [], separate,

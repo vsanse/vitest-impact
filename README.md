@@ -1,147 +1,165 @@
-# Vitest Impact
+# vitest-impact
 
-A working, deliberately narrow MVP for explaining and validating change-based Vitest execution on constrained CI runners. It wraps Vitest's own selection logic, adds explicit non-code input ownership and conservative fallbacks, and chooses a worker budget.
+Run a repository's Vitest tests faster, and (opt-in) only the tests a change can affect.
 
-**Default execution mode is shadow: compute a selection, then run the entire suite.** Selective execution is an explicit opt-in. This is a prototype, not a proven zero-miss selector or a published npm package.
+- **Speed part.** One Vitest process for all the packages of a monorepo, a worker count sized for the machine (including container CPU limits), warm caches in `.vitest-impact/cache`, and a report with time per package and phase.
+- **Selection part.** From a base revision, it computes which tests a change can affect. **Shadow mode is the default: it computes the selection, then runs the whole suite and reports any failure the selection would have missed.** `--mode selected` is an opt-in that runs only the selection. When the tool is not sure, it runs the full set and says why.
 
-Requires Node 22.12+ or 24+ as supported by Vitest, **Vitest exactly 5.0.5**, and one Node-based project using the `forks` or `threads` pool. DOM environments in those pools are supported by the adapter but have not yet been benchmarked here. Browser/VM/custom pools, multi-project workspaces, and typechecking suites are rejected.
+One measurement, not a promise: in one private monorepo, running 44 packages in one Vitest process used 47% fewer CPU-seconds and 64% less peak memory than one Vitest process per package under Turbo (one local measurement). Measure your own repository.
 
-## Try the working demo
+Requires Node 22.12+ and Vitest ^5.0.5. Tested with Vitest 5.0.5. Another 5.x version runs, but selection is turned off and the full set runs (with a warning in the plan). Vitest 4 and older are rejected.
+
+## Install
+
+```bash
+npm install --save-dev vitest-impact
+npx vitest-impact init
+```
+
+`init` writes `vitest-impact.config.json` and adds `.vitest-impact/` to `.gitignore`. It refuses to overwrite an existing config. Commit the config.
+
+## Commands
+
+```bash
+vitest-impact init  [--root PATH]
+vitest-impact plan  --base REF [options]
+vitest-impact run   [--base REF] [--mode shadow|selected|full] [options]
+vitest-impact check [--filter TOKEN] [--write]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--root PATH` | Repository root (default: current folder). |
+| `--config PATH` | The impact config, relative to the root (default `vitest-impact.config.json`). |
+| `--vitest-config PATH` | Use this Vitest config and skip workspace discovery. |
+| `--base REF` | An ancestor revision. Without a valid base the full set runs. |
+| `--mode` | `shadow` (default): select, then run everything. `selected`: run only the selection. `full`: run everything, no selection. Only for `run`. |
+| `--filter TOKEN` | Repeatable. Only an exact package name or `./<folder glob>` is supported. `!` excludes. A positive token that matches no package is an error; a negated token that matches nothing is not. Needs a workspace. |
+| `--shard i/n` | Run the i-th of n shares of the planned files (one-process packages by file; script packages by package name). An empty shard still writes its report. |
+| `--max-workers N`, `--memory-mb N`, `--worker-memory-mb N`, `--reserve-memory-mb N` | Resource budget (see below). |
+| `--write` | Only for `check`: record candidates in the config's `isolated` list. |
+
+`plan` loads the Vitest configuration and transforms modules but runs no test bodies. Configuration files and plugins are executable code, as in any Vitest run. Saved plans are for inspection; each run computes a fresh plan.
+
+Example for CI, keeping a Turbo-style filter:
+
+```bash
+npx vitest-impact run --base "$IMPACT_BASE" --mode shadow --filter '!./tools/*'
+```
+
+## Workspace mode
+
+If the root has a `pnpm-workspace.yaml` (its `packages:` list) or a `package.json` `workspaces` field, the tool finds the packages and runs their Vitest tests in one process. `pnpm-workspace.yaml` wins when both exist. Without a workspace, the tool runs the single project as before.
+
+- The root package's own `test` script is never run.
+- A package is a **Vitest package** when its `test` script is exactly `vitest` or `vitest run` and it has a `vitest.config.*` or `vite.config.*` file. A package with any other `test` script (for example lint, then Vitest) is a **script package**: its script runs as it is, in its own process, through the repository's package manager. A package with no `test` script is left out.
+- No root Vitest config is used in workspace mode. A root-level shared config is ignored. Settings Vitest reads only from the root (for example `reporters`) come from the tool.
+- A package that fails to parse, an empty filter result, or a Vitest package with no test files (unless its config sets `passWithNoTests: true`) is an error (exit 2). A package with `passWithNoTests: true` and no test files is left out and listed as `emptyPackages` in the plan.
+- `process.cwd()` in a package's tests is the package folder, as with `vitest run` inside that folder. It works with the `forks` pool (a shim calls `process.chdir`), including `isolate: false` and `vmForks`. See [docs/decisions/cwd-parity.md](docs/decisions/cwd-parity.md).
+
+**Known gaps of the working-folder guarantee:** the package config file is loaded with the repo root as the working folder, and Vite plugins run in the main process, so code in either that calls `process.cwd()` sees the repo root. A package with `globalSetup` runs separately, because global setup also sees the repo root.
+
+### Packages that run in their own process
+
+A Vitest package runs in its own Vitest process, with its own settings, when the plan shows one of these reasons (`plan.json`, field `separate`):
+
+| Reason | Why it cannot share the process |
+| --- | --- |
+| `isolated-in-config` | The package is in the config's `isolated` list. |
+| `pool:<name>` | The pool is not `forks` (for example `threads`, which cannot `chdir`, or `vmForks`). |
+| `browser` | Browser mode. |
+| `typecheck` | Typecheck is enabled. |
+| `file-parallelism-off` | `fileParallelism: false` is a per-package setting. |
+| `global-setup` | `globalSetup` runs in the main process and sees the repo root. |
+| `coverage` | Coverage is on in the package config. The package runs alone, in full, with its own thresholds. |
+| `fs-module-cache-off` | The package sets `fsModuleCache: false`, which a shared run cannot honor for one package only. |
+
+A separate package keeps its own result: if its process exits non-zero, the run exits 1, even if every test passed (coverage thresholds, unhandled errors). Separate units run one after another.
+
+## The `isolated` list and `check`
+
+Some packages pass alone but fail when sharing a process (shared module state, ports, global mocks). Put them in `isolated`:
+
+```json
+{ "version": 1, "isolated": ["@acme/legacy-api"] }
+```
+
+`vitest-impact check` finds them. It runs every Vitest package that has no structural reason to run apart in the shared process (ignoring the current `isolated` list), then runs each failing package alone. A package that fails shared but passes alone is a candidate. A package that also fails alone is a real failure (exit 1). `check --write` merges the candidates into `isolated` (sorted, no duplicates, all other keys kept). Commit the config. In CI a listed package runs in its own process from the start. The tool never reruns a failed package to turn it into a pass.
+
+`check` overwrites `.vitest-impact/plan.json`, `report.json` and `summary.md`, because it is a run too.
+
+## Caches
+
+Shared runs write to `.vitest-impact/cache`:
+
+- `cache/modules`: Vitest's transform cache (`fsModuleCachePath`). Separate Vitest units get the same path.
+- `cache/vite`: Vite's `cacheDir`, which also holds Vitest's results cache (file durations, used to start slow files first).
+
+The tool never forces `fsModuleCache` on (Vitest 5.0.5 defaults it to true), and a package that sets it to `false` runs separately. In **single-project mode** the tool overrides your `cacheDir` and `fsModuleCachePath` for its own runs; plain `vitest` runs keep theirs. The first run after adoption starts cold. In workspace mode, a package's own `cacheDir` only affects its Vite pre-bundle cache.
+
+The tool never deletes `.vitest-impact/cache`. In CI, restore and save that folder with the cache step of your CI, keyed on lockfiles and config files:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: .vitest-impact/cache
+    key: vitest-impact-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', 'vitest-impact.config.json', '**/vitest.config.*', '**/vite.config.*') }}
+```
+
+See [`examples/consumer-workflow.yml`](examples/consumer-workflow.yml).
+
+## Resource budget
+
+`maxWorkers` is a ceiling, capped by the CPU count (including cgroup quota) and an estimate of memory: `(available memory - reserve) / worker estimate`. Defaults: 512 MB per worker, 512 MB reserve. On macOS the tool uses total memory, because `os.freemem` leaves out reclaimable cache. The numbers are estimates for admission, not limits; they do not guard against out-of-memory. The tool refuses a budget that cannot fit one worker (exit 2). A package's own lower `maxWorkers` is kept, and `fileParallelism: false` is kept. The tool does not change test timeouts.
+
+```json
+{ "resources": { "maxWorkers": 2, "workerMemoryMb": 1024, "reserveMemoryMb": 1024 } }
+```
+
+## Report and exit codes
+
+Each run replaces these files in `.vitest-impact/`: `plan.json` (decisions and reasons, separate units, script packages, empty packages, resources, warnings), `report.json`, and `summary.md` (also appended to `GITHUB_STEP_SUMMARY` when set). Plans do not hold source contents or environment values.
+
+The report holds:
+
+- **Time per package and phase.** For one-process packages, phases are summed over files; for separate units no phase data exists, only wall time. Phases map to Vitest's own Duration line like this: the tool's `import` is Vitest's "import" plus the separate "transform" wait, and `setup` includes Vitest's "worker" time (so these two do not equal Vitest's numbers one by one). `environment` and `tests` match Vitest's.
+- **Slowest files** (top 10).
+- **Timeouts**: each test or hook that timed out, with the peak and mean load per CPU during the run. A peak above 1 means the machine was overloaded and a timeout may come from that.
+- **Failed separate units**, and units that produced no report.
+- In shadow mode, `missedFailingFiles`, and recall of observed failures. An all-green run reports `no-failures-observed` with `null` recall, never "100% safe".
+
+Exit codes: `0` passed. `1` a test failed, a run-level Vitest failure, or a separate unit exited non-zero. `2` invalid configuration, infrastructure error (including a process that could not start), or an incomplete run (missing or unexpected files, unhandled errors). A shadow run fails if any full-suite test fails, even one the selection would skip.
+
+Each run takes `.vitest-impact/run.lock`. Run one at a time per checkout. After a killed process, confirm the owner is gone before removing the lock.
+
+## Selection
+
+Config keys (`vitest-impact.config.json`): `sourcePatterns`, `inputs` (`{ files, tests }` rules for files tests read without importing), `forceFull`, `ignore`, `alwaysRun`, `isolated`, `resources`. Globs are positive, repository-relative POSIX paths. `init` starts with empty lists, so unclassified changes run the full set until you declare ownership. `ignore` is your assertion that a path cannot affect tests; a wrong rule can hide a failure, which shadow mode helps expose.
+
+The selection uses Git changes from `--base` to the working tree (committed, staged, unstaged and non-ignored untracked files) and Vitest's own related-test analysis. It runs the **full set** for: no base, an invalid or non-ancestor base, deleted or type-changed files, unknown paths, protected files (configs, lockfiles, environment files), an empty native selection for changed source, a fixture owner that matches no test, coverage turned on, an untested Vitest version, and any known selection error. Changed tests and `alwaysRun` tests always run. With coverage on, selection is off for that package and it runs in full.
+
+### What it guarantees, and what it does not
+
+- Every planned file is compared with what ran. Missing or unexpected files make the report invalid (exit 2), never a quiet success.
+- Shadow mode runs everything, so it cannot hide a failure; it only tells you whether the selection would have.
+- There is **no universal completeness guarantee** for unrestricted JavaScript. It does not follow dynamic imports, filesystem reads, `.env` edits, external services, generated files outside Git, or links between workspace packages through `dist`. Old import graphs are not rebuilt, so deletions run the full set. No dependency records are kept between runs yet. Keep your full-suite gates and use shadow mode first.
+- A base is only checked to be an ancestor. Git does not prove the base passed its tests.
+- Concurrent edits during a run are not supported.
+
+### Vitest internals it depends on
+
+- `specifications.filterTestsBySource`, a private Vitest method used to get a selection without running. If it is missing or throws, the full set runs.
+- `config.providedOptions`, an untyped field used to see whether a package set its own `maxWorkers`. If it is missing, the lower value is kept.
+
+An unsupported major version is rejected before any run. These are the main compatibility risk and the reason for the exact tested version.
+
+## Development
 
 ```bash
 npm ci
-npm run check
-npm run demo
-```
-
-The demo creates a temporary Git repository with three test files. It verifies source selection, full-suite shadow execution, and a failing filesystem fixture dependency. Reports are copied to `.vitest-impact/demo/`; the temporary repository is removed. The intentional fixture failure is expected, so the demo itself succeeds when the failure is correctly detected.
-
-## Use it in an existing project
-
-Build this checkout, then invoke its CLI from a target repository that has Vitest 5.0.5 installed:
-
-```bash
-# In this checkout:
-npm run build
-
-# In the target repository:
-node /absolute/path/to/vitest-impact/dist/cli.js init
-```
-
-Review and commit `vitest-impact.config.json` and the `.gitignore` entry that `init` adds. `init` refuses to overwrite an existing config. Its source/input/ignore lists start empty: unclassified changes trigger the full suite until you deliberately declare ownership.
-
-```json
-{
-  "version": 1,
-  "sourcePatterns": ["src/**/*.ts"],
-  "inputs": [
-    { "files": ["fixtures/**"], "tests": ["test/fixture.test.ts"] }
-  ],
-  "forceFull": ["schemas/**"],
-  "ignore": ["docs/**"],
-  "alwaysRun": [],
-  "resources": {
-    "maxWorkers": 2,
-    "workerMemoryMb": 1024,
-    "reserveMemoryMb": 512
-  }
-}
-```
-
-Glob patterns are positive, repository-relative POSIX paths; matching includes dotfiles. `sourcePatterns` is an **input contract**: changes to those paths can be analyzed through static imports plus your declared inputs. Do not classify arbitrary filesystem reads, variable imports, directory scans, or external-service dependencies as fully handled by that graph. Add `inputs` or `forceFull` rules instead. `ignore` is a user assertion that a path cannot affect tests; an incorrect ignore rule can hide failures. Shadow mode helps expose such mistakes.
-
-Use an explicit ancestor revision. `HEAD` is useful for local uncommitted edits; CI needs the PR/merge candidate's proper base:
-
-Choose a baseline with appropriate successful validation. Git ancestry alone does not prove that the baseline passed its tests; this MVP does not query CI to verify that history.
-
-```bash
-node /absolute/path/to/vitest-impact/dist/cli.js plan --base HEAD
-node /absolute/path/to/vitest-impact/dist/cli.js run --base HEAD
-node /absolute/path/to/vitest-impact/dist/cli.js run --base HEAD --mode selected
-node /absolute/path/to/vitest-impact/dist/cli.js run --mode full
-```
-
-`--root` selects the repository root. `--config` selects the impact JSON config; `--vitest-config` selects the Vitest config. Saved plans are inspection artifacts, not executable cache entries: each run computes a fresh plan. `plan` loads Vitest configuration and transforms modules but does not execute test bodies. Configuration files and transform plugins are executable code, as in a normal Vitest invocation.
-
-For a local package installation, `npm pack` creates a tarball; install it as a dev dependency in the target project. The package is private and has not been published. Its `vitest-impact` bin then becomes available to npm scripts. Keep the exact Vitest peer version until the adapter compatibility matrix is expanded.
-
-## What it guarantees within its implemented contract
-
-- Uses Git changes from the supplied revision to the working tree, including committed changes, staged/unstaged changes and non-ignored untracked files.
-- Requires the base to be an ancestor of HEAD. Missing Git history, no base, invalid revisions, and divergent bases broaden to the full configured suite.
-- Includes changed/new tests, declared fixture owners, and mandatory tests.
-- Runs the full suite for deleted/type-changed inputs, unknown paths, protected configuration/lock/environment files, and known selection errors. Declared ignored documentation is an exception to structural fallback.
-- Protected inputs and directly changed tests take precedence over ignore rules.
-- A declared fixture owner matching no tests triggers a full run. An `alwaysRun` pattern matching no tests is a configuration error.
-- Empty native selection for changed source falls back to full. An empty selection is otherwise allowed for no changes or explicitly ignored changes, after confirming that the configured suite is nonempty.
-- Coverage-enabled configurations run the full suite, preserving whole-suite coverage behaviour.
-- Rejects existing changed/related/shard/project/name/tag filters that would silently narrow the validation universe. Test `.only` markers and unhandled errors cannot be configured away through this wrapper.
-- Executes exact Vitest test specifications, not substring filename filters.
-- Detects tracked and non-ignored file-content edits during planning. This is a drift check, not a filesystem transaction; concurrent edits during execution are unsupported.
-- Compares expected and observed file identities. Missing/unexpected executions invalidate the report rather than looking like success.
-
-There is no universal completeness guarantee for unrestricted JavaScript. The MVP does not reconstruct old import graphs: deletions use full fallback. It does not infer ignored `.env` edits, external-service changes, runtime drift since the baseline, generated inputs outside Git, or arbitrary dynamic dependencies. No persistent dependency graph or test-result cache is used. Keep full validation gates while evaluating it.
-
-## Resource budgeting
-
-`maxWorkers` is a ceiling, capped by available CPU and an estimated memory budget. The implementation uses Node's capacity information and Linux cgroup v2 quota/memory information where available. Default concurrency is at most two workers, with a **512 MB unmeasured worker estimate** and a 512 MB reserve.
-
-```bash
-vitest-impact run --base HEAD --max-workers 2 \
-  --memory-mb 4096 --worker-memory-mb 1024 --reserve-memory-mb 1024
-```
-
-Memory numbers are estimates used for admission, not enforced limits. They do not guarantee against OOM. The tool refuses an estimated budget that cannot fit one worker. It preserves stricter Vitest worker settings and `fileParallelism: false`. It does not measure peak memory or coordinate other test processes/service containers automatically. Account for those in your reserve and outer task-runner concurrency. It does not change test timeouts or automatically disable isolation.
-
-## Reports and exit status
-
-Each invocation acquires `.vitest-impact/run.lock` and replaces these local artifacts:
-
-| Artifact | Content |
-| --- | --- |
-| `plan.json` | Base/head, versions, impact-config hash, changed paths, test decisions/reasons, fallback reasons, worker budget, warnings |
-| `report.json` | Plan plus executed files, outcomes, timings, missing executions and shadow misses |
-| `summary.md` | Human-readable CI summary; also appended to `GITHUB_STEP_SUMMARY` when present |
-
-A native selection reason names the input set it analyzed; it is not a fabricated edge-by-edge dependency proof. Plans do not store source contents or environment-variable values. File paths and test outcomes remain in local artifacts unless your CI uploads them.
-
-Shadow mode computes its selection **before** executing the full suite. A failing file outside the selection is reported in `missedFailingFiles`. Failing-file recall is measured only when a complete shadow run observes failures. All-green runs report `no-failures-observed` with `null` recall, never “100% safe.” File-level collection failures count as failures. Incomplete runs cannot claim recall.
-
-Summed test-body/hook durations produce a duration fraction, not predicted wall-clock savings or reduced billed minutes. Planning overhead includes discovery and the workspace drift check. There is no historical learning in this version.
-
-Exit codes: `0` passed, `1` test/run-level failure, `2` invalid configuration, infrastructure error, or incomplete execution. A shadow run fails if any full-suite test fails, even when the proposed selection would skip it. Reports preserve run-level Vitest failure status. Prior reports are removed at invocation start so a failed startup cannot leave an old green report behind.
-
-Run one invocation per checkout. A second invocation fails while the lock is held. If a process is killed without cleanup, inspect `run.lock` and confirm the owner has stopped before removing that lock. Concurrent invocations in separate checkouts are independent.
-
-## GitHub Actions
-
-See [`examples/consumer-workflow.yml`](examples/consumer-workflow.yml). It fetches full history, passes the PR base through an environment variable, runs shadow mode, and uploads artifacts even when tests fail. It assumes you have installed this local package in the consumer repository; it is not an instruction to download an unpublished package from npm.
-
-For merge queues, select against the actual merge candidate and its validated base. A nightly full run is a delayed detection mechanism, not equivalent to full pre-merge assurance. Retain existing full-suite gates during the pilot. Source-only selection and runner sharding have different effects on total billed minutes.
-
-## Implementation and validation
-
-The adapter uses public Vitest discovery/execution APIs and one private, version-pinned bridge for selection without execution: `specifications.filterTestsBySource`. Its absence/failure falls back to full selection. An unsupported Vitest version is rejected before running. This is the primary compatibility risk and a good candidate for an upstream public API proposal.
-
-Modules:
-
-- `src/planner.ts`: input rules, fallback policy and decision explanations.
-- `src/git.ts`: revision validation, NUL-safe Git parsing and drift fingerprints.
-- `src/adapter.ts`: version guard, native selection and exact execution.
-- `src/resources.ts`: CPU/memory estimates and worker budget.
-- `src/report.ts`: outcome validation, observed miss detection and CI summary.
-- `src/index.ts` / `src/cli.ts`: orchestration and commands.
-
-`npm run check` compiles the implementation and runs unit plus real CLI integration tests. Integration tests create temporary Git repositories and execute actual Vitest workers. They include a deliberately unsafe ignore rule to verify that shadow mode detects a real missed failure, not just a mocked selection discrepancy.
-
-The repository CI workflow checks Node 22 and 24. Local validation results apply only to the runtime actually used; a workflow file is not evidence that remote CI has run.
-
-An optional generated scale experiment compares native full and native changed execution, wrapper full execution, wrapper selection, and shadow mode:
-
-```bash
+npm run check      # typecheck, build, tests
+npm run demo       # temporary repository: selection, shadow run, a failing fixture input
 npm run benchmark -- --files 1000 --runs 1
 ```
 
-This creates 1,000 trivial files in 20 independent source groups, then changes one group without introducing a failure. It verifies exact execution counts, disables persistent transform caching, records whole-process times, and saves `.vitest-impact/benchmark.json`. One repetition is a scale smoke test, not a robust performance estimate; it does not measure production failure recall. Increase `--runs` for repeated measurements and use real repositories before making savings claims.
-
-Next experiments: representative Node/DOM suites, measured worker memory, native-versus-wrapper overhead, historical failed-PR replay, and a public selection API. Dynamic scheduling, remote caching, Rust, individual-test-case exclusion, and AI selection are intentionally outside this MVP.
+CI runs Node 22 and 24. The benchmark is a scale smoke test, not a performance estimate.

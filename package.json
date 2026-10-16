@@ -1,6 +1,6 @@
 {
   "name": "vitest-impact",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
   "description": "Conservative change-based Vitest execution with resource budgets and shadow validation.",
@@ -14,6 +14,7 @@
     "dist",
     "README.md",
     "LICENSE",
+    "CHANGELOG.md",
     "examples"
   ],
   "engines": {

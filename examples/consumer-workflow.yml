@@ -1,5 +1,6 @@
-# Copy into a consumer repository only after installing this package locally.
+# Copy into a repository that has vitest-impact installed as a dev dependency.
 # Keep full-suite gates while evaluating selection. Shadow runs every test.
+# This example is for a workspace. For a single package, drop --filter (it needs a workspace).
 name: Test impact observation
 on:
   pull_request:
@@ -22,7 +23,7 @@ jobs:
           path: .vitest-impact/cache
           key: vitest-impact-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', 'vitest-impact.config.json', '**/vitest.config.*', '**/vite.config.*') }}
       - name: Observe selection against the full suite
-        run: npx --no-install vitest-impact run --base "$IMPACT_BASE" --mode shadow --max-workers 2
+        run: npx --no-install vitest-impact run --base "$IMPACT_BASE" --mode shadow --filter '!./tools/*'
         env:
           IMPACT_BASE: ${{ github.event.pull_request.base.sha }}
       - uses: actions/upload-artifact@v4

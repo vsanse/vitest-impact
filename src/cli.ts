@@ -8,7 +8,7 @@ import { DEFAULT_CONFIG, loadConfig, writeIsolated } from './config.js'
 import { checkIsolation } from './check.js'
 import type { ImpactConfig, RunReport } from './types.js'
 
-const HELP = `vitest-impact — conservative Vitest execution (MVP)
+const HELP = `vitest-impact: faster Vitest runs for monorepos, with conservative selection
 
 Usage:
   vitest-impact init [--root PATH]
@@ -29,7 +29,7 @@ Options:
   --worker-memory-mb N        Estimated incremental memory per worker
   --reserve-memory-mb N       Memory kept for coordinator/services
   --write                     With check: record the candidates in the config's isolated list
-  --help                      Show this help
+  --help, -h                  Show this help
 
 Artifacts: .vitest-impact/{plan.json,report.json,summary.md}
 Exit codes: 0 passed, 1 test failures, 2 configuration/infrastructure/incomplete run.
