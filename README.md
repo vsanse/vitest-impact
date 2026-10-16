@@ -102,14 +102,18 @@ Shared runs write to `.vitest-impact/cache`:
 
 The tool never forces `fsModuleCache` on (Vitest 5.0.5 defaults it to true), and a package that sets it to `false` runs separately. In **single-project mode** the tool overrides your `cacheDir` and `fsModuleCachePath` for its own runs; plain `vitest` runs keep theirs. The first run after adoption starts cold. In workspace mode, a package's own `cacheDir` only affects its Vite pre-bundle cache.
 
-The tool never deletes `.vitest-impact/cache`. In CI, restore and save that folder with the cache step of your CI, keyed on lockfiles and config files:
+The tool never deletes `.vitest-impact/cache`. In CI, restore and save that folder with the cache step of your CI, keyed on lockfiles and config files (leave `node_modules` out of the patterns):
 
 ```yaml
 - uses: actions/cache@v4
   with:
     path: .vitest-impact/cache
-    key: vitest-impact-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', 'vitest-impact.config.json', '**/vitest.config.*', '**/vite.config.*') }}
+    key: vitest-impact-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', 'vitest-impact.config.json', '**/vitest.config.*', '**/vite.config.*', '!**/node_modules/**') }}
 ```
+
+- Run the workflow on pushes to the default branch too. A pull request can restore a cache saved on its base branch, so without those runs each pull request starts cold.
+- Sharded jobs run different files, so add the shard index to the key (for example `vitest-impact-${{ runner.os }}-${{ matrix.shard }}-...`).
+- Leave the cache out of any artifact upload (`!.vitest-impact/cache`).
 
 See [`examples/consumer-workflow.yml`](examples/consumer-workflow.yml).
 

@@ -4,6 +4,9 @@
 name: Test impact observation
 on:
   pull_request:
+  # Runs on the default branch save the cache that pull requests restore.
+  push:
+    branches: [main]
 permissions:
   contents: read
 jobs:
@@ -12,23 +15,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # A shallow clone cannot resolve --base, so the full set would run.
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+      # Sharded jobs: add the shard index to the key, for example vitest-impact-${{ runner.os }}-${{ matrix.shard }}-...
       - uses: actions/cache@v4
         with:
           path: .vitest-impact/cache
-          key: vitest-impact-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', 'vitest-impact.config.json', '**/vitest.config.*', '**/vite.config.*') }}
+          key: vitest-impact-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', 'vitest-impact.config.json', '**/vitest.config.*', '**/vite.config.*', '!**/node_modules/**') }}
       - name: Observe selection against the full suite
-        run: npx --no-install vitest-impact run --base "$IMPACT_BASE" --mode shadow --filter '!./tools/*'
+        run: npx --no-install vitest-impact run --base "$IMPACT_BASE" --mode "$IMPACT_MODE" --filter '!./tools/*'
         env:
+          # A push has no pull request base: it runs the full set.
           IMPACT_BASE: ${{ github.event.pull_request.base.sha }}
+          IMPACT_MODE: ${{ github.event_name == 'push' && 'full' || 'shadow' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: vitest-impact
-          path: .vitest-impact/
+          path: |
+            .vitest-impact/
+            !.vitest-impact/cache
           include-hidden-files: true
