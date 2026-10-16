@@ -4,11 +4,11 @@ import { rm } from 'node:fs/promises'
 import { VitestAdapter } from './adapter.js'
 import { loadConfig } from './config.js'
 import { changedFiles, localPath, workspaceFingerprint } from './git.js'
-import { selectTests } from './planner.js'
+import { matches, selectTests } from './planner.js'
 import { budgetResources, startLoadSampler } from './resources.js'
 import { analyzeRun, writeJson, writeSummary } from './report.js'
 import { withRunLock } from './lock.js'
-import { discoverPackages, filterPackages } from './workspace.js'
+import { discoverPackages, filterPackages, untrackedDependents } from './workspace.js'
 import { parseShard, scriptInShard, shardRunSet } from './shard.js'
 import { runSeparate } from './separate.js'
 import type { FileResult, ImpactConfig, LoadSummary, PackageResult, Plan, RunReport, WorkspacePackage } from './types.js'
@@ -50,7 +50,8 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
   const git = await changedFiles(root, options.base)
   const extra = [loaded.path, ...(options.vitestConfig ? [resolve(root, options.vitestConfig)] : [])]
   const fingerprint = await workspaceFingerprint(root, extra)
-  const packages = await workspacePackages(root, options, options.ignoreIsolated ? [] : loaded.config.isolated)
+  const workspace = await workspacePackages(root, options, options.ignoreIsolated ? [] : loaded.config.isolated)
+  const packages = workspace?.packages ?? null
   const vitestPackages = packages?.filter(p => p.kind === 'vitest') ?? []
   // With no Vitest package (only scripts), createVitest would throw "No projects were found".
   const adapter = packages && !vitestPackages.length ? null
@@ -63,6 +64,11 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     if (options.mode === 'full') forced.push('explicit-full-run')
     if (!loaded.found) forced.push('no-impact-config: configure input ownership before selecting tests')
     if (adapter?.context.config.coverage.enabled) forced.push('coverage-enabled: preserve complete-suite coverage')
+    if (workspace && adapter) {
+      const testFiles = new Set(adapter.tests().map(t => t.file))
+      const sources = git.changes.map(c => c.path).filter(path => !testFiles.has(path) && matches(path, loaded.config.sourcePatterns))
+      forced.push(...await untrackedDependents(root, workspace.found, workspace.packages, sources))
+    }
     const selection = adapter ? await selectTests({
       tests: adapter.tests(), git, config: loaded.config,
       protectedFiles: extra.map(file => localPath(root, file)),
@@ -159,8 +165,8 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
   } finally { await adapter?.close() }
 }
 
-/** Workspace packages with tests after --filter, or null for today's single-project run (no workspace, or --vitest-config). */
-async function workspacePackages(root: string, options: Options, isolated: string[]): Promise<WorkspacePackage[] | null> {
+/** All workspace packages and those with tests after --filter, or null for today's single-project run (no workspace, or --vitest-config). */
+async function workspacePackages(root: string, options: Options, isolated: string[]): Promise<{ found: WorkspacePackage[]; packages: WorkspacePackage[] } | null> {
   const filters = options.filters ?? []
   if (options.vitestConfig) {
     if (isolated.length) throw new Error(`isolated package not found: ${isolated[0]}`)
@@ -179,7 +185,7 @@ async function workspacePackages(root: string, options: Options, isolated: strin
     throw new Error(filters.length ? 'No package with tests matches the filters'
       : 'No workspace package has a Vitest test script. Use --vitest-config for a suite run from one root config.')
   }
-  return packages
+  return { found, packages }
 }
 
 // os.loadavg() is all zeros on Windows, so there is no load to report.

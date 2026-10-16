@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'vitest'
-import { readdir, readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, symlink } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { makeFixture, makeWorkspaceFixture, put, invoke } from '../scripts/fixture.mjs'
+import { makeFixture, makeWorkspaceFixture, put, invoke, git, projectRoot } from '../scripts/fixture.mjs'
 
 const cleanups: (() => Promise<void>)[] = []
 async function workspaceFixture(options: { packages?: Record<string, string>; config?: object } = {}) {
@@ -451,4 +451,31 @@ test('timeouts are listed for shared and separate units, including per-test hook
   expect(run.report.timeouts.map(t => `${t.file}: ${t.test}`).sort()).toEqual(['a', 'b'].flatMap(p => [
     `packages/${p}/test/after.test.ts: before slow after`, `packages/${p}/test/each.test.ts: after slow each`, `packages/${p}/test/slow.test.ts: waits`,
   ]))
+})
+
+test('a source change in a package another package depends on runs the full set', async () => {
+  // @w/a loads @w/b through its built dist/, which the import graph cannot link to b's src/ (probe p6).
+  const { root } = await workspaceFixture({ packages: {
+    '.gitignore': 'node_modules/\n.vitest/\n.vitest-impact/\ndist/\n',
+    'packages/b/package.json': JSON.stringify({ name: '@w/b', type: 'module', main: 'dist/index.js', scripts: { test: 'vitest run' } }),
+    'packages/a/package.json': JSON.stringify({ name: '@w/a', type: 'module', dependencies: { '@w/b': '*' }, scripts: { test: 'vitest run' } }),
+    'packages/a/test/uses-b.test.ts': "import { test, expect } from 'vitest'; import { name } from '@w/b'; test('a sees b', () => expect(name).toBe('b'))\n",
+  } })
+  // A real node_modules folder (not the shared symlink), so @w/b can be linked as a package manager would.
+  await rm(resolve(root, 'node_modules'))
+  await mkdir(resolve(root, 'node_modules/@w'), { recursive: true })
+  for (const entry of await readdir(resolve(projectRoot, 'node_modules'))) if (!entry.startsWith('.')) await symlink(resolve(projectRoot, 'node_modules', entry), resolve(root, 'node_modules', entry))
+  await symlink(resolve(root, 'packages/b'), resolve(root, 'node_modules/@w/b'))
+  // The baseline committed the node_modules symlink; commit its removal so the base diff holds only b's change.
+  await git(root, 'add', '-A')
+  await git(root, '-c', 'user.name=Tests', '-c', 'user.email=tests@example.invalid', 'commit', '-qm', 'real node_modules')
+  const base = await git(root, 'rev-parse', 'HEAD')
+  await put(root, 'packages/b/src/index.ts', "export const name = 'B'\n")
+  await put(root, 'packages/b/test/unit.test.ts', "import { test, expect } from 'vitest'; import { name } from '../src/index'; test('name', () => expect(name).toBe('B'))\n")
+  await put(root, 'packages/b/dist/index.js', "export const name = 'B'\n")
+  const run = await invoke(root, ['run', '--mode', 'selected', '--base', base])
+  expect(run.plan.fallbackReasons).toContain('workspace-dependents-not-tracked: @w/b')
+  expect(run.plan.mode).toBe('full')
+  expect(run.code, run.output).toBe(1)
+  expect(run.report.executed.find(t => t.file === 'packages/a/test/uses-b.test.ts')?.state).toBe('failed')
 })

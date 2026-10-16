@@ -110,3 +110,25 @@ export function filterPackages(packages: WorkspacePackage[], filters: string[]):
   }
   return packages.filter(p => picked.has(p) && p.kind !== 'none')
 }
+
+const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']
+
+/**
+ * Design 6.2.3, "run the full set when not sure": a change in package X can reach a package that depends on X
+ * through X's built output (dist/), which the import graph does not link to X's sources. 0.2.0 does not track
+ * those links, so each changed source path inside X, with X listed by a package in the run set, forces full.
+ */
+export async function untrackedDependents(root: string, all: WorkspacePackage[], runSet: WorkspacePackage[], changedSources: string[]): Promise<string[]> {
+  const changed = new Set<string>()
+  for (const path of changedSources) {
+    const owner = all.filter(p => p.dir !== '.' && path.startsWith(`${p.dir}/`)).sort((a, b) => b.dir.length - a.dir.length)[0]
+    if (owner) changed.add(owner.name)
+  }
+  if (!changed.size) return []
+  const listed = new Set<string>()
+  for (const p of runSet) {
+    const json = await readJson(resolve(root, p.dir, 'package.json'), `${p.dir}/package.json`)
+    for (const field of DEPENDENCY_FIELDS) for (const name of Object.keys((json?.[field] ?? {}) as object)) listed.add(name)
+  }
+  return [...changed].filter(name => listed.has(name)).sort().map(name => `workspace-dependents-not-tracked: ${name}`)
+}
