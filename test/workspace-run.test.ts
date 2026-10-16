@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'vitest'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { makeFixture, makeWorkspaceFixture, put, invoke } from '../scripts/fixture.mjs'
 
@@ -373,4 +373,11 @@ test('check --write merges into an existing isolated list, sorted', async () => 
   expect(check.code, check.output).toBe(0)
   const config = JSON.parse(await readFile(resolve(root, 'vitest-impact.config.json'), 'utf8'))
   expect(config.isolated).toEqual(['@w/b', '@w/z'])
+})
+
+test('runs keep their module cache in .vitest-impact/cache across invocations', async () => {
+  const { root } = await workspaceFixture()
+  expect((await invoke(root, ['run', '--mode', 'full'])).code).toBe(0)
+  expect((await readdir(resolve(root, '.vitest-impact/cache/modules'))).length).toBeGreaterThan(0)
+  expect((await invoke(root, ['run', '--mode', 'full'])).code).toBe(0)
 })

@@ -71,3 +71,12 @@ reason `global-setup` and runs in its own process.
   `reporters`, `teardownTimeout`, `onConsoleLog`) come from the tool, not from a package config.
   `coverage` is handled (reason `coverage`), but only as the config file sets it: a Vite plugin that
   turns coverage on in its `config` hook is not seen by the second load.
+
+## Caches
+
+- Shared runs set `test.fsModuleCache: true`, `test.fsModuleCachePath: .vitest-impact/cache/modules` and
+  Vite `cacheDir: .vitest-impact/cache/vite` (the results cache) as root overrides. Referenced projects
+  fall back to the root module-cache path; a package's own `cacheDir` is not replaced (only the root's is).
+- Separate `vitest` units: Vitest 5.0.5 has the CLI flag `--fsModuleCachePath`, so they get the same path.
+  They keep their own Vite `cacheDir` (no CLI flag is passed for it).
+- The tool never deletes `.vitest-impact/cache`; only `plan.json`, `report.json` and `summary.md` are removed at start.

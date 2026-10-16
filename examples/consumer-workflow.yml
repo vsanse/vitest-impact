@@ -17,6 +17,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: .vitest-impact/cache
+          key: vitest-impact-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', 'vitest-impact.config.json', '**/vitest.config.*', '**/vite.config.*') }}
       - name: Observe selection against the full suite
         run: npx --no-install vitest-impact run --base "$IMPACT_BASE" --mode shadow --max-workers 2
         env:

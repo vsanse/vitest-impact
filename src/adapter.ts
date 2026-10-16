@@ -42,7 +42,12 @@ export class VitestAdapter {
     if (!policy.ok) throw new Error(policy.error)
     const { createVitest } = await import(pathToFileURL(require.resolve('vitest/node')).href) as typeof import('vitest/node')
     const { packages } = options
-    const projects: ViteUserConfig | undefined = packages ? { test: { projects: packages.map(p => resolve(root, p.vitestConfig!)) } } : undefined
+    // Warm caches live in the state folder so one CI cache step carries them between runs.
+    const cache = resolve(root, '.vitest-impact', 'cache')
+    const overrides: ViteUserConfig = {
+      cacheDir: resolve(cache, 'vite'),
+      test: { fsModuleCache: true, fsModuleCachePath: resolve(cache, 'modules'), ...(packages ? { projects: packages.map(p => resolve(root, p.vitestConfig!)) } : {}) },
+    }
     const context = await createVitest({
       root,
       // Workspace mode: no root Vitest config; each package's own config is one project.
@@ -55,7 +60,7 @@ export class VitestAdapter {
       passWithNoTests: false,
       update: false,
       experimental: { recordDependencies: false },
-    }, projects)
+    }, overrides)
     try {
       if (!packages && context.projects.length !== 1) throw new Error('MVP supports exactly one Vitest project. Run each project separately with an outer concurrency budget.')
       const cfg = context.config
