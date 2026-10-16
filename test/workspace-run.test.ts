@@ -327,3 +327,41 @@ test('check finds a package that fails only in the shared process, and --write r
   const run = await invoke(root, ['run', '--mode', 'full'], 90_000)
   expect(run.code, run.output).toBe(0)
 })
+
+test('check: a package that fails shared and alone is a real failure (exit 1)', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/b/test/bad.test.ts': "import { test, expect } from 'vitest'; test('bad', () => expect(1).toBe(2))\n" } })
+  const check = await invoke(root, ['check'], 90_000)
+  expect(check.code, check.output).toBe(1)
+  expect(check.output).toContain('@w/b: shared failed, alone failed -> real failure')
+})
+
+test('check: a failing structural package is reported and exits 1', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/b/vitest.config.ts': "import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { include: ['test/**/*.test.ts'], pool: 'threads' } })\n",
+    'packages/b/test/bad.test.ts': "import { test, expect } from 'vitest'; test('bad', () => expect(1).toBe(2))\n" } })
+  const check = await invoke(root, ['check'], 90_000)
+  expect(check.code, check.output).toBe(1)
+  expect(check.output).toContain('@w/b: runs alone (structural: pool:threads), failed -> real failure')
+})
+
+test('check: a test file that throws at import never exits 0 silently', async () => {
+  const { root } = await workspaceFixture({ packages: { 'packages/b/test/boom.test.ts': "throw new Error('boom')\n" } })
+  const check = await invoke(root, ['check'], 90_000)
+  expect(check.code, check.output).not.toBe(0)
+  expect(check.output).toMatch(/@w\/b|check:/)
+})
+
+test('check --write merges into an existing isolated list, sorted', async () => {
+  const { root } = await workspaceFixture({
+    config: { isolated: ['@w/z'] },
+    packages: {
+      'packages/z/package.json': JSON.stringify({ name: '@w/z', type: 'module', scripts: { test: 'vitest run' } }),
+      'packages/z/vitest.config.ts': "import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { include: ['test/**/*.test.ts'] } })\n",
+      'packages/z/test/z.test.ts': "import { test } from 'vitest'; test('z', () => {})\n",
+      'packages/b/test/env.test.ts': "import { test, expect } from 'vitest'; test('alone only', () => expect(process.env.VITEST_IMPACT_CWD).toBeUndefined())\n" } })
+  const check = await invoke(root, ['check', '--write'], 90_000)
+  expect(check.code, check.output).toBe(0)
+  const config = JSON.parse(await readFile(resolve(root, 'vitest-impact.config.json'), 'utf8'))
+  expect(config.isolated).toEqual(['@w/b', '@w/z'])
+})

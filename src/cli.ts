@@ -78,6 +78,7 @@ async function main(): Promise<void> {
       ...(values['vitest-config'] ? { vitestConfig: values['vitest-config'] } : {}),
     })
     for (const r of results.filter(r => r.shared === 'failed')) {
+      if (r.structural) { console.log(`${r.package}: runs alone (structural: ${r.structural}), failed -> real failure`); continue }
       console.log(`${r.package}: shared failed, alone ${r.alone} -> ${r.alone === 'passed' ? 'isolated candidate' : 'real failure'}`)
     }
     const candidates = results.filter(r => r.alone === 'passed').map(r => r.package)
