@@ -1,23 +1,46 @@
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import type { TestSpecification, Vitest, TestRunResult } from 'vitest/node'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import type { TestProject, TestSpecification, Vitest, TestRunResult } from 'vitest/node'
+import type { ViteUserConfig } from 'vitest/config'
 import { localPath } from './git.js'
 import { versionPolicy } from './version.js'
-import type { FileResult, ResourceBudget, TestFile } from './types.js'
+import type { FileResult, ResourceBudget, TestFile, WorkspacePackage } from './types.js'
+
+const CWD_SHIM = fileURLToPath(new URL('./cwd-shim.js', import.meta.url))
+// Vitest 5.0.5 resolves these per project but leaves them out of the ResolvedConfig type.
+type Untyped = { fileParallelism?: boolean; providedOptions?: { maxWorkers?: boolean } }
+
+/** Why a project cannot share this process, or null. See docs/decisions/cwd-parity.md. */
+function separateReason(project: TestProject): string | null {
+  const config = project.config
+  if (config.browser.enabled) return 'browser'
+  if (config.typecheck.enabled) return 'typecheck'
+  if (config.pool !== 'forks') return `pool:${config.pool}`
+  if ((config as Untyped).fileParallelism === false) return 'file-parallelism-off'
+  if ([config.globalSetup].flat().length) return 'global-setup'
+  return null
+}
 
 export class VitestAdapter {
-  private constructor(readonly context: Vitest, readonly root: string, readonly specs: TestSpecification[], readonly version: string, readonly versionWarning?: string) {}
+  private constructor(
+    readonly context: Vitest, readonly root: string, readonly specs: TestSpecification[],
+    private readonly owners: Map<TestProject, WorkspacePackage>, private readonly separated: { package: string; reason: string }[],
+    readonly version: string, readonly versionWarning?: string,
+  ) {}
 
-  static async open(root: string, budget: ResourceBudget, config?: string): Promise<VitestAdapter> {
+  static async open(root: string, budget: ResourceBudget, options: { vitestConfig?: string; packages?: WorkspacePackage[] } = {}): Promise<VitestAdapter> {
     const require = createRequire(resolve(root, 'package.json'))
     const pkg = require('vitest/package.json') as { version: string }
     const policy = versionPolicy(pkg.version)
     if (!policy.ok) throw new Error(policy.error)
     const { createVitest } = await import(pathToFileURL(require.resolve('vitest/node')).href) as typeof import('vitest/node')
+    const { packages } = options
+    const projects: ViteUserConfig | undefined = packages ? { test: { projects: packages.map(p => resolve(root, p.vitestConfig!)) } } : undefined
     const context = await createVitest({
       root,
-      ...(config ? { config: resolve(root, config) } : {}),
+      // Workspace mode: no root Vitest config; each package's own config is one project.
+      ...(packages ? { config: false as const } : options.vitestConfig ? { config: resolve(root, options.vitestConfig) } : {}),
       watch: false,
       run: true,
       allowOnly: false,
@@ -26,35 +49,80 @@ export class VitestAdapter {
       passWithNoTests: false,
       update: false,
       experimental: { recordDependencies: false },
-    })
+    }, projects)
     try {
-      if (context.projects.length !== 1) throw new Error('MVP supports exactly one Vitest project. Run each project separately with an outer concurrency budget.')
-      const project = context.projects[0]!
+      if (!packages && context.projects.length !== 1) throw new Error('MVP supports exactly one Vitest project. Run each project separately with an outer concurrency budget.')
       const cfg = context.config
       if (cfg.changed || cfg.related || cfg.shard || cfg.testNamePattern || cfg.tagsFilter?.length || cfg.project?.length) {
         throw new Error('Remove Vitest changed/related/shard/project/name/tag filters: vitest-impact must discover the entire configured suite.')
       }
-      if (project.config.testNamePattern || project.config.tagsFilter?.length) throw new Error('Project-level name/tag filters are not supported.')
-      if (!['forks', 'threads'].includes(String(project.config.pool)) || project.config.browser.enabled || project.config.typecheck.enabled) {
-        throw new Error('MVP supports Node forks/threads pools only (including jsdom/happy-dom). Browser, VM/custom pools, and typecheck suites are not yet supported.')
+      for (const project of context.projects) {
+        if (project.config.testNamePattern || project.config.tagsFilter?.length) throw new Error('Project-level name/tag filters are not supported.')
       }
-      // Cap native concurrency; never override a user's stricter serial/worker setting.
-      const configuredLimit = Math.min(cfg.maxWorkers, project.config.maxWorkers)
-      if (configuredLimit < budget.maxWorkers) {
-        budget.warnings.push(`Preserved Vitest's stricter ${configuredLimit}-worker limit.`)
-        budget.maxWorkers = configuredLimit
+      const owners = new Map<TestProject, WorkspacePackage>()
+      let separated: { package: string; reason: string }[] = []
+      if (!packages) {
+        const project = context.projects[0]!
+        if (!['forks', 'threads'].includes(String(project.config.pool)) || project.config.browser.enabled || project.config.typecheck.enabled) {
+          throw new Error('MVP supports Node forks/threads pools only (including jsdom/happy-dom). Browser, VM/custom pools, and typecheck suites are not yet supported.')
+        }
+        // Cap native concurrency; never override a user's stricter serial/worker setting.
+        const configuredLimit = Math.min(cfg.maxWorkers, project.config.maxWorkers)
+        if (configuredLimit < budget.maxWorkers) {
+          budget.warnings.push(`Preserved Vitest's stricter ${configuredLimit}-worker limit.`)
+          budget.maxWorkers = configuredLimit
+        }
+        cfg.maxWorkers = budget.maxWorkers
+        project.config.maxWorkers = budget.maxWorkers
+        project.config.allowOnly = false
+      } else {
+        // Name each project after the discovered package that holds its root, not Vitest's default name.
+        const reasons = new Map<WorkspacePackage, string>()
+        for (const project of context.projects) {
+          const dir = localPath(root, project.config.root)
+          const owner = packages.filter(p => dir === p.dir || dir.startsWith(`${p.dir}/`)).sort((a, b) => b.dir.length - a.dir.length)[0]
+          if (!owner) throw new Error(`Vitest project root is outside every package: ${dir}`)
+          owners.set(project, owner)
+          const reason = separateReason(project)
+          if (reason && !reasons.has(owner)) reasons.set(owner, reason)
+        }
+        separated = packages.filter(p => reasons.has(p)).map(p => ({ package: p.name, reason: reasons.get(p)! }))
+        cfg.maxWorkers = budget.maxWorkers
+        const shared = context.projects.filter(project => !reasons.has(owners.get(project)!))
+        for (const project of shared) {
+          const owner = owners.get(project)!
+          // The budget is the root limit; a project that sets a lower limit keeps it.
+          const setsLimit = (project.config as Untyped).providedOptions?.maxWorkers !== false
+          const limit = setsLimit ? Math.min(project.config.maxWorkers, budget.maxWorkers) : budget.maxWorkers
+          const kept = `Kept ${owner.name}'s ${limit}-worker limit.`
+          if (limit < budget.maxWorkers && !budget.warnings.includes(kept)) budget.warnings.push(kept)
+          project.config.maxWorkers = limit
+          project.config.allowOnly = false
+          project.config.env = { ...project.config.env, VITEST_IMPACT_CWD: resolve(root, owner.dir) }
+          project.config.setupFiles = [CWD_SHIM, ...project.config.setupFiles]
+        }
+        // Vitest runs one sequence.groupOrder at a time and needs one maxWorkers value per group:
+        // give each (groupOrder, maxWorkers) pair its own group, keeping the configured order.
+        let group = -1
+        let previous = ''
+        for (const project of [...shared].sort((a, b) => a.config.sequence.groupOrder - b.config.sequence.groupOrder || b.config.maxWorkers - a.config.maxWorkers)) {
+          const pair = `${project.config.sequence.groupOrder}/${project.config.maxWorkers}`
+          if (pair !== previous) { group++; previous = pair }
+          project.config.sequence.groupOrder = group
+        }
       }
-      cfg.maxWorkers = budget.maxWorkers
-      project.config.maxWorkers = budget.maxWorkers
-      project.config.allowOnly = false
       const specs = await context.globTestSpecifications()
       if (!specs.length) throw new Error('No test files discovered. Refusing an empty successful run.')
-      return new VitestAdapter(context, root, specs, pkg.version, policy.selection ? undefined : policy.warning)
+      for (const p of packages ?? []) if (!specs.some(spec => owners.get(spec.project) === p)) throw new Error(`No test files discovered in ${p.name}. Refusing an empty successful run.`)
+      return new VitestAdapter(context, root, specs, owners, separated, pkg.version, policy.selection ? undefined : policy.warning)
     } catch (error) { await context.close(); throw error }
   }
 
+  /** Packages that must not run in this process. */
+  separate(): { package: string; reason: string }[] { return this.separated }
+
   tests(): TestFile[] {
-    return this.specs.map(spec => ({ id: spec.taskId, file: localPath(this.root, spec.moduleId), project: spec.project.name }))
+    return this.specs.map(spec => ({ id: spec.taskId, file: localPath(this.root, spec.moduleId), project: this.owners.get(spec.project)?.name ?? spec.project.name }))
   }
 
   async related(paths: string[]): Promise<string[]> {
@@ -73,7 +141,8 @@ export class VitestAdapter {
   }
 
   async run(ids: Set<string>): Promise<TestRunResult> {
-    const specs = this.specs.filter(spec => ids.has(spec.taskId))
+    const apart = new Set(this.separated.map(s => s.package))
+    const specs = this.specs.filter(spec => ids.has(spec.taskId) && !apart.has(this.owners.get(spec.project)?.name ?? ''))
     if (!specs.length) return { testModules: [], unhandledErrors: [] }
     await this.context.standalone()
     return this.context.runTestSpecifications(specs, specs.length === this.specs.length)

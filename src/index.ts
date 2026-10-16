@@ -8,7 +8,8 @@ import { selectTests } from './planner.js'
 import { budgetResources } from './resources.js'
 import { analyzeRun, writeJson, writeSummary } from './report.js'
 import { withRunLock } from './lock.js'
-import type { ImpactConfig, Plan, RunReport } from './types.js'
+import { discoverPackages, filterPackages } from './workspace.js'
+import type { ImpactConfig, Plan, RunReport, WorkspacePackage } from './types.js'
 
 export type { ImpactConfig, Plan, RunReport } from './types.js'
 export { selectTests } from './planner.js'
@@ -20,6 +21,7 @@ export interface Options {
   base?: string
   config?: string
   vitestConfig?: string
+  filters?: string[]
   command: 'plan' | 'run'
   mode?: RunReport['mode']
   resources?: ImpactConfig['resources']
@@ -41,7 +43,10 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
   const git = await changedFiles(root, options.base)
   const extra = [loaded.path, ...(options.vitestConfig ? [resolve(root, options.vitestConfig)] : [])]
   const fingerprint = await workspaceFingerprint(root, extra)
-  const adapter = await VitestAdapter.open(root, resources, options.vitestConfig)
+  const packages = await workspacePackages(root, options)
+  const adapter = await VitestAdapter.open(root, resources, packages
+    ? { packages: packages.filter(p => p.kind === 'vitest') }
+    : options.vitestConfig ? { vitestConfig: options.vitestConfig } : {})
   try {
     const forced: string[] = []
     if (adapter.versionWarning) forced.push(adapter.versionWarning)
@@ -56,7 +61,9 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     const plan: Plan = {
       schemaVersion: 1, toolVersion: '0.1.0', vitestVersion: adapter.version,
       nodeVersion: process.version, root, createdAt: new Date().toISOString(), git,
-      configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection, resources,
+      configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection,
+      packages: packages?.map(p => p.name) ?? [], separate: adapter.separate(),
+      scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], resources,
       planningMs: performance.now() - start,
       warnings: [
         'Selection assumes sourcePatterns use statically resolvable dependencies; declare other inputs or force a full run.',
@@ -74,6 +81,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     plan.planningMs = performance.now() - start
     await writeJson(resolve(output, 'plan.json'), plan)
     if (options.command === 'plan') return { plan }
+    if (plan.separate.length || plan.scripts.length) throw new Error('Separate execution is not implemented')
     const mode = options.mode ?? 'shadow'
     const ids = new Set(plan.decisions.filter(t => mode !== 'selected' || t.selected).map(t => t.id))
     const runStart = performance.now()
@@ -91,4 +99,21 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     await writeSummary(report, resolve(output, 'summary.md'))
     return { plan, report }
   } finally { await adapter.close() }
+}
+
+/** Workspace packages with tests after --filter, or null for today's single-project run (no workspace, or --vitest-config). */
+async function workspacePackages(root: string, options: Options): Promise<WorkspacePackage[] | null> {
+  const filters = options.filters ?? []
+  if (options.vitestConfig) {
+    if (filters.length) throw new Error('--filter cannot be used with --vitest-config')
+    return null
+  }
+  const found = await discoverPackages(root)
+  if (found.length === 1 && found[0]!.dir === '.') {
+    if (filters.length) throw new Error('--filter needs a workspace (pnpm-workspace.yaml or package.json workspaces)')
+    return null
+  }
+  const packages = filterPackages(found, filters)
+  if (!packages.length) throw new Error('No package with tests matches the filters')
+  return packages
 }

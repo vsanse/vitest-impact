@@ -15,9 +15,16 @@ export async function put(root, path, content) {
   await mkdir(dirname(resolve(root, path)), { recursive: true })
   await writeFile(resolve(root, path), content)
 }
-export async function makeFixture(options = {}) {
-  const root = await mkdtemp(resolve(tmpdir(), 'vitest-impact-'))
+async function makeRepo(prefix, files) {
+  const root = await mkdtemp(resolve(tmpdir(), prefix))
   await symlink(resolve(projectRoot, 'node_modules'), resolve(root, 'node_modules'), 'dir')
+  await Promise.all(Object.entries(files).map(([path, content]) => put(root, path, content)))
+  await git(root, 'init', '-q')
+  await git(root, 'add', '.')
+  await git(root, '-c', 'user.name=Vitest Impact Tests', '-c', 'user.email=tests@example.invalid', 'commit', '-qm', 'fixture baseline')
+  return { root, base: await git(root, 'rev-parse', 'HEAD'), cleanup: () => rm(root, { recursive: true, force: true }) }
+}
+export async function makeFixture(options = {}) {
   const config = {
     version: 1,
     sourcePatterns: ['src/**/*.ts'],
@@ -26,7 +33,7 @@ export async function makeFixture(options = {}) {
     resources: { maxWorkers: 1, workerMemoryMb: 128, reserveMemoryMb: 128 },
     ...options,
   }
-  const files = {
+  const repo = await makeRepo('vitest-impact-', {
     '.gitignore': 'node_modules/\n.vitest/\n.vitest-impact/\n',
     'package.json': JSON.stringify({ type: 'module', private: true, devDependencies: { vitest: '5.0.5' } }),
     'vitest.config.ts': "import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { include: ['test/**/*.test.ts'], maxWorkers: 1 } })\n",
@@ -38,12 +45,38 @@ export async function makeFixture(options = {}) {
     'test/fixture.test.ts': "import { test, expect } from 'vitest'; import { readFileSync } from 'node:fs'; test('reads fixture', () => expect(readFileSync('fixtures/rate.txt', 'utf8').trim()).toBe('10'))\n",
     'fixtures/rate.txt': '10\n',
     'docs/readme.md': 'Example documentation\n',
+  })
+  return { ...repo, config }
+}
+// Two npm-workspace packages, @w/a and @w/b. `packages` adds or replaces files (path -> content).
+export async function makeWorkspaceFixture(options = {}) {
+  const config = {
+    version: 1,
+    sourcePatterns: ['packages/*/src/**/*.ts'],
+    resources: { maxWorkers: 2, workerMemoryMb: 128, reserveMemoryMb: 128 },
+    ...options.config,
   }
-  await Promise.all(Object.entries(files).map(([path, content]) => put(root, path, content)))
-  await git(root, 'init', '-q')
-  await git(root, 'add', '.')
-  await git(root, '-c', 'user.name=Vitest Impact Tests', '-c', 'user.email=tests@example.invalid', 'commit', '-qm', 'fixture baseline')
-  return { root, config, base: await git(root, 'rev-parse', 'HEAD'), cleanup: () => rm(root, { recursive: true, force: true }) }
+  const files = {
+    '.gitignore': 'node_modules/\n.vitest/\n.vitest-impact/\n',
+    'package.json': JSON.stringify({ type: 'module', private: true, workspaces: ['packages/*'], devDependencies: { vitest: '5.0.5' } }),
+    'vitest-impact.config.json': JSON.stringify(config, null, 2),
+  }
+  for (const name of ['a', 'b']) {
+    const dir = `packages/${name}`
+    Object.assign(files, {
+      [`${dir}/package.json`]: JSON.stringify({ name: `@w/${name}`, type: 'module', scripts: { test: 'vitest run' } }),
+      [`${dir}/vitest.config.ts`]: "import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { include: ['test/**/*.test.ts'] } })\n",
+      [`${dir}/data.txt`]: `${name}\n`,
+      [`${dir}/src/index.ts`]: `export const name = '${name}'\n`,
+      [`${dir}/test/unit.test.ts`]: `import { test, expect } from 'vitest'; import { name } from '../src/index'; test('name', () => expect(name).toBe('${name}'))\n`,
+      [`${dir}/test/cwd.test.ts`]: "import { test, expect } from 'vitest'; import { readFileSync, realpathSync } from 'node:fs'; import { dirname } from 'node:path'; import { fileURLToPath } from 'node:url'\n" +
+        "test('runs in the package folder', () => {\n" +
+        "  expect(realpathSync(process.cwd())).toBe(realpathSync(dirname(dirname(fileURLToPath(import.meta.url)))))\n" +
+        `  expect(readFileSync('data.txt', 'utf8').trim()).toBe('${name}')\n})\n`,
+      [`${dir}/test/same.test.ts`]: `import { test, expect } from 'vitest'; test('same path, package ${name}', () => expect(1).toBe(1))\n`,
+    })
+  }
+  return makeRepo('vitest-impact-ws-', { ...files, ...options.packages })
 }
 
 export async function invoke(root, args, timeout = 30_000) {

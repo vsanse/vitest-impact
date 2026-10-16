@@ -16,7 +16,8 @@ Usage:
 Options:
   --root PATH                 Git repository root (default: current directory)
   --config PATH               Impact JSON config, relative to root
-  --vitest-config PATH        Vitest config, relative to root
+  --vitest-config PATH        Vitest config, relative to root (skips workspace discovery)
+  --filter PKG                Package name or ./folder-glob; ! excludes; repeatable
   --base REF                  Explicit ancestor revision; absent/invalid means full suite
   --mode MODE                 shadow (default), selected, or full
   --max-workers N             Worker ceiling, capped by CPU/memory estimate
@@ -27,7 +28,7 @@ Options:
 
 Artifacts: .vitest-impact/{plan.json,report.json,summary.md}
 Exit codes: 0 passed, 1 test failures, 2 configuration/infrastructure/incomplete run.
-Single Node project, Vitest 5.0.5 only. Shadow mode runs ALL tests.
+A workspace runs its Vitest packages in one process. Shadow mode runs ALL tests.
 `
 
 async function main(): Promise<void> {
@@ -35,6 +36,7 @@ async function main(): Promise<void> {
     allowPositionals: true,
     options: {
       root: { type: 'string' }, config: { type: 'string' }, 'vitest-config': { type: 'string' },
+      filter: { type: 'string', multiple: true },
       base: { type: 'string' }, mode: { type: 'string' }, help: { type: 'boolean', short: 'h' },
       'max-workers': { type: 'string' }, 'memory-mb': { type: 'string' },
       'worker-memory-mb': { type: 'string' }, 'reserve-memory-mb': { type: 'string' },
@@ -75,6 +77,7 @@ async function main(): Promise<void> {
     ...(values.base !== undefined ? { base: values.base } : {}),
     ...(values.config ? { config: values.config } : {}),
     ...(values['vitest-config'] ? { vitestConfig: values['vitest-config'] } : {}),
+    ...(values.filter ? { filters: values.filter } : {}),
     ...(values.mode ? { mode: values.mode as RunReport['mode'] } : {}),
   })
   console.log(`\nImpact plan: ${plan.decisions.filter(t => t.selected).length}/${plan.decisions.length} files; ${plan.mode}; ${plan.resources.maxWorkers} workers.`)

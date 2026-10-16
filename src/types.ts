@@ -50,6 +50,12 @@ export interface Plan {
   fallbackReasons: string[]
   ignoredChanges: string[]
   decisions: TestDecision[]
+  /** Workspace packages in this plan (empty without a workspace). */
+  packages: string[]
+  /** Vitest packages that must run in their own process. */
+  separate: { package: string; reason: string }[]
+  /** Packages whose test script runs as-is. */
+  scripts: string[]
   resources: ResourceBudget
   planningMs: number
   warnings: string[]
