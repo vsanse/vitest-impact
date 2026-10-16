@@ -314,3 +314,16 @@ test('shards together run every file once with a clean report', async () => {
   const all = JSON.parse(await readFile(resolve(root, '.vitest-impact/plan.json'), 'utf8')).decisions.map((d: { file: string }) => d.file)
   expect(seen.sort()).toEqual(all.sort())
 })
+
+test('check finds a package that fails only in the shared process, and --write records it', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/b/test/env.test.ts': "import { test, expect } from 'vitest'; test('alone only', () => expect(process.env.VITEST_IMPACT_CWD).toBeUndefined())\n" } })
+  const check = await invoke(root, ['check', '--write'], 90_000)
+  expect(check.code, check.output).toBe(0)
+  expect(check.output).toContain('@w/b: shared failed, alone passed -> isolated candidate')
+  const config = JSON.parse(await readFile(resolve(root, 'vitest-impact.config.json'), 'utf8'))
+  expect(config.isolated).toEqual(['@w/b'])
+  expect(config.sourcePatterns).toEqual(['packages/*/src/**/*.ts'])
+  const run = await invoke(root, ['run', '--mode', 'full'], 90_000)
+  expect(run.code, run.output).toBe(0)
+})

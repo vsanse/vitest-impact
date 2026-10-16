@@ -4,7 +4,8 @@ import { resolve } from 'node:path'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import { execute } from './index.js'
 import { parseShard } from './shard.js'
-import { DEFAULT_CONFIG } from './config.js'
+import { DEFAULT_CONFIG, loadConfig, writeIsolated } from './config.js'
+import { checkIsolation } from './check.js'
 import type { ImpactConfig, RunReport } from './types.js'
 
 const HELP = `vitest-impact — conservative Vitest execution (MVP)
@@ -13,6 +14,7 @@ Usage:
   vitest-impact init [--root PATH]
   vitest-impact plan --base REF [options]
   vitest-impact run --base REF [--mode shadow|selected|full] [options]
+  vitest-impact check [--filter PKG] [--write]   find packages that fail only in the shared process
 
 Options:
   --root PATH                 Git repository root (default: current directory)
@@ -26,6 +28,7 @@ Options:
   --memory-mb N               Available memory budget in MB
   --worker-memory-mb N        Estimated incremental memory per worker
   --reserve-memory-mb N       Memory kept for coordinator/services
+  --write                     With check: record the candidates in the config's isolated list
   --help                      Show this help
 
 Artifacts: .vitest-impact/{plan.json,report.json,summary.md}
@@ -39,15 +42,16 @@ async function main(): Promise<void> {
     options: {
       root: { type: 'string' }, config: { type: 'string' }, 'vitest-config': { type: 'string' },
       filter: { type: 'string', multiple: true },
-      base: { type: 'string' }, shard: { type: 'string' }, mode: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+      base: { type: 'string' }, shard: { type: 'string' }, mode: { type: 'string' }, help: { type: 'boolean', short: 'h' }, write: { type: 'boolean' },
       'max-workers': { type: 'string' }, 'memory-mb': { type: 'string' },
       'worker-memory-mb': { type: 'string' }, 'reserve-memory-mb': { type: 'string' },
     },
   })
   if (values.help) { console.log(HELP); return }
   const command = positionals[0]
-  if (positionals.length !== 1 || !['init', 'plan', 'run'].includes(command ?? '')) throw new Error(HELP)
+  if (positionals.length !== 1 || !['init', 'plan', 'run', 'check'].includes(command ?? '')) throw new Error(HELP)
   if (values.mode && !['shadow', 'selected', 'full'].includes(values.mode)) throw new Error('--mode must be shadow, selected, or full')
+  if (command !== 'check' && values.write) throw new Error('--write is only supported with check')
   if (command !== 'run' && values.mode) throw new Error('--mode is only supported with run')
   if (values.shard !== undefined) parseShard(values.shard)
   const root = resolve(values.root ?? process.cwd())
@@ -65,6 +69,24 @@ async function main(): Promise<void> {
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     if (!ignore.split(/\r?\n/).includes('.vitest-impact/')) await appendFile(resolve(root, '.gitignore'), `${ignore.endsWith('\n') || !ignore ? '' : '\n'}.vitest-impact/\n`)
     console.log(`Created ${DEFAULT_CONFIG}. Add reviewed sourcePatterns and input rules. Until then, unclassified changes run the full suite.`)
+    return
+  }
+  if (command === 'check') {
+    const results = await checkIsolation(root, {
+      filters: values.filter ?? [],
+      ...(values.config ? { config: values.config } : {}),
+      ...(values['vitest-config'] ? { vitestConfig: values['vitest-config'] } : {}),
+    })
+    for (const r of results.filter(r => r.shared === 'failed')) {
+      console.log(`${r.package}: shared failed, alone ${r.alone} -> ${r.alone === 'passed' ? 'isolated candidate' : 'real failure'}`)
+    }
+    const candidates = results.filter(r => r.alone === 'passed').map(r => r.package)
+    if (values.write && candidates.length) {
+      const path = (await loadConfig(root, values.config)).path
+      await writeIsolated(path, candidates)
+      console.log(`Wrote isolated: [${candidates.join(', ')}] to ${path}`)
+    }
+    process.exitCode = results.some(r => r.alone === 'failed') ? 1 : 0
     return
   }
   const resources: ImpactConfig['resources'] = {}

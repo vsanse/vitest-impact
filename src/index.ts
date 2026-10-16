@@ -29,6 +29,8 @@ export interface Options {
   resources?: ImpactConfig['resources']
   /** `i/n`: run only this share of the planned files. */
   shard?: string
+  /** Treat the config's `isolated` list as empty (used by `check`). */
+  ignoreIsolated?: boolean
 }
 
 export async function execute(options: Options): Promise<{ plan: Plan; report?: RunReport }> {
@@ -48,12 +50,12 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
   const git = await changedFiles(root, options.base)
   const extra = [loaded.path, ...(options.vitestConfig ? [resolve(root, options.vitestConfig)] : [])]
   const fingerprint = await workspaceFingerprint(root, extra)
-  const packages = await workspacePackages(root, options, loaded.config.isolated)
+  const packages = await workspacePackages(root, options, options.ignoreIsolated ? [] : loaded.config.isolated)
   const vitestPackages = packages?.filter(p => p.kind === 'vitest') ?? []
   // With no Vitest package (only scripts), createVitest would throw "No projects were found".
   const adapter = packages && !vitestPackages.length ? null
     : await VitestAdapter.open(root, resources, packages
-      ? { packages: vitestPackages, isolated: loaded.config.isolated }
+      ? { packages: vitestPackages, isolated: options.ignoreIsolated ? [] : loaded.config.isolated }
       : options.vitestConfig ? { vitestConfig: options.vitestConfig } : {})
   try {
     const forced: string[] = []

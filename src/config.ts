@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { ImpactConfig } from './types.js'
@@ -67,4 +67,14 @@ export async function loadConfig(root: string, path?: string): Promise<{ config:
 }
 export function hash(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex')
+}
+
+/** Merge names into the config's `isolated` list (sorted, no duplicates), keeping every other key. */
+export async function writeIsolated(path: string, names: string[]): Promise<void> {
+  let data: Record<string, unknown> = { version: 1 }
+  try { data = object(JSON.parse(await readFile(path, 'utf8')), 'Config') }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  const existing = Array.isArray(data.isolated) ? data.isolated as string[] : []
+  data.isolated = [...new Set([...existing, ...names])].sort()
+  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`)
 }
