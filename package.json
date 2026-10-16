@@ -1,0 +1,43 @@
+{
+  "name": "vitest-impact",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Conservative change-based Vitest execution with resource budgets and shadow validation.",
+  "bin": {
+    "vitest-impact": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "examples"
+  ],
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && vitest run",
+    "check": "npm run typecheck && npm test",
+    "demo": "npm run build && node scripts/demo.mjs",
+    "benchmark": "npm run build && node scripts/benchmark.mjs"
+  },
+  "dependencies": {
+    "minimatch": "10.2.4"
+  },
+  "peerDependencies": {
+    "vitest": "^5.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "5.0.5"
+  },
+  "repository": "github:vsanse/vitest-impact"
+}

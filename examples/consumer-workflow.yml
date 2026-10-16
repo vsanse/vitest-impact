@@ -1,0 +1,29 @@
+# Copy into a consumer repository only after installing this package locally.
+# Keep full-suite gates while evaluating selection. Shadow runs every test.
+name: Test impact observation
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  shadow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Observe selection against the full suite
+        run: npx --no-install vitest-impact run --base "$IMPACT_BASE" --mode shadow --max-workers 2
+        env:
+          IMPACT_BASE: ${{ github.event.pull_request.base.sha }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vitest-impact
+          path: .vitest-impact/
+          include-hidden-files: true

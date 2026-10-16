@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "sourcePatterns": ["src/**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs}"],
+  "inputs": [
+    { "files": ["fixtures/pricing/**"], "tests": ["test/pricing/**/*.test.ts"] }
+  ],
+  "forceFull": ["schemas/**", "scripts/generate/**"],
+  "ignore": ["docs/**"],
+  "alwaysRun": ["test/smoke.test.ts"],
+  "resources": {
+    "maxWorkers": 2,
+    "memoryBudgetMb": 4096,
+    "workerMemoryMb": 1024,
+    "reserveMemoryMb": 1024
+  }
+}
