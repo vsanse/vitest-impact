@@ -20,6 +20,9 @@ export function packageManager(root: string): 'pnpm' | 'yarn' | 'npm' {
   return 'npm'
 }
 
+/** A test that failed on its own timeout or on a per-test hook's. Vitest's JSON report holds the stack, which starts with "Error: ". */
+export const TIMED_OUT = /(?:^|Error: )(Test|Hook) timed out in \d+ms/
+
 interface JsonReport { testResults?: { name: string; status: string; startTime: number; endTime: number; assertionResults?: { status: string; fullName?: string; title?: string; ancestorTitles?: string[]; failureMessages?: string[] }[] }[] }
 
 export function parseJsonReport(json: unknown, root: string, idsByFile: Map<string, string>, project: string): FileResult[] {
@@ -28,7 +31,7 @@ export function parseJsonReport(json: unknown, root: string, idsByFile: Map<stri
     const counts = { passed: 0, failed: 0, skipped: 0, pending: 0 }
     const timedOut: string[] = []
     for (const test of result.assertionResults ?? []) {
-      if (test.failureMessages?.some(m => /^(Test|Hook) timed out in \d+ms/.test(m))) timedOut.push(test.fullName ?? [...(test.ancestorTitles ?? []), test.title ?? ''].join(' > '))
+      if (test.failureMessages?.some(m => TIMED_OUT.test(m))) timedOut.push(test.fullName ?? [...(test.ancestorTitles ?? []), test.title ?? ''].join(' > '))
       if (test.status === 'passed') counts.passed++
       else if (test.status === 'failed') counts.failed++
       else if (test.status === 'pending') counts.pending++

@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { TestProject, TestSpecification, Vitest, TestRunResult } from 'vitest/node'
 import type { ViteUserConfig } from 'vitest/config'
 import { localPath } from './git.js'
+import { TIMED_OUT } from './separate.js'
 import { versionPolicy } from './version.js'
 import type { FileResult, ResourceBudget, TestFile, WorkspacePackage } from './types.js'
 
@@ -197,7 +198,7 @@ export class VitestAdapter {
     return result.testModules.map(module => {
       const counts = { passed: 0, failed: 0, skipped: 0, pending: 0 }
       for (const test of module.children.allTests()) counts[test.result().state]++
-      const timedOut = [...module.children.allTests()].filter(t => t.result().errors?.some(e => /^(Test|Hook) timed out in \d+ms/.test(e.message))).map(t => t.fullName)
+      const timedOut = [...module.children.allTests()].filter(t => t.result().errors?.some(e => TIMED_OUT.test(e.message))).map(t => t.fullName)
       const d = module.diagnostic()
       // importMs = collectDuration, environmentMs = environmentSetupDuration, setupMs = prepareDuration + setupDuration, testsMs = duration
       const phases = { importMs: d.collectDuration, environmentMs: d.environmentSetupDuration, setupMs: d.prepareDuration + d.setupDuration, testsMs: d.duration }

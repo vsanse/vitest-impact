@@ -431,3 +431,24 @@ test('under --shard a package with its own coverage runs whole in exactly one sh
   expect(perShard.filter(files => files.length)).toHaveLength(1)
   expect(perShard.flat()).toHaveLength(6)
 })
+
+test('timeouts are listed for shared and separate units, including per-test hook timeouts', async () => {
+  const wait = 'async () => { await new Promise(r => setTimeout(r, 400)) }'
+  const files = {
+    'slow.test.ts': `import { test } from 'vitest'; test('waits', ${wait}, 50)\n`,
+    'each.test.ts': `import { test, beforeEach } from 'vitest'; beforeEach(${wait}, 50); test('after slow each', () => {})\n`,
+    'after.test.ts': `import { test, afterEach } from 'vitest'; afterEach(${wait}, 50); test('before slow after', () => {})\n`,
+    // A beforeAll or afterAll timeout fails the file but belongs to no test, so it is not listed.
+    'all.test.ts': `import { test, beforeAll } from 'vitest'; beforeAll(${wait}, 50); test('after slow all', () => {})\n`,
+    'final.test.ts': `import { test, afterAll } from 'vitest'; afterAll(${wait}, 50); test('before slow final', () => {})\n`,
+  }
+  const packages: Record<string, string> = { 'packages/b/vitest.config.ts': config("pool: 'threads'") }
+  for (const p of ['a', 'b']) for (const [name, body] of Object.entries(files)) packages[`packages/${p}/test/${name}`] = body
+  const { root } = await workspaceFixture({ packages })
+  const run = await invoke(root, ['run', '--mode', 'full'], 60_000)
+  expect(run.code, run.output).toBe(1)
+  expect(run.report.executed.filter(t => /\/(all|final)\.test\.ts$/.test(t.file)).map(t => t.state)).toEqual(['failed', 'failed', 'failed', 'failed'])
+  expect(run.report.timeouts.map(t => `${t.file}: ${t.test}`).sort()).toEqual(['a', 'b'].flatMap(p => [
+    `packages/${p}/test/after.test.ts: before slow after`, `packages/${p}/test/each.test.ts: after slow each`, `packages/${p}/test/slow.test.ts: waits`,
+  ]))
+})

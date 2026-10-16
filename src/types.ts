@@ -80,7 +80,7 @@ export interface FileResult {
   pending: number
   /** Time per phase; null when the runner gives none (separate units). */
   phases: Phases | null
-  /** Full names of tests whose error matches /^(Test|Hook) timed out in \d+ms/. */
+  /** Full names of tests that failed on their own timeout or a per-test hook's (separate.ts TIMED_OUT). */
   timedOut: string[]
 }
 export interface Phases { importMs: number; environmentMs: number; setupMs: number; testsMs: number }

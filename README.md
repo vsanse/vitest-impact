@@ -126,7 +126,7 @@ The report holds:
 
 - **Time per package and phase.** For one-process packages, phases are summed over files; for separate units no phase data exists, only wall time. Phases map to Vitest's own Duration line like this: the tool's `import` is Vitest's collect time, so it includes the collect part of Vitest's separate "transform" wait. The tool's `setup` is Vitest's setup plus its "worker" time, so it includes Vitest's "worker" time and the setup part of the "transform" wait. These two do not equal Vitest's numbers one by one. `environment` and `tests` match Vitest's.
 - **Slowest files** (top 10).
-- **Timeouts**: each test or hook that timed out, with the peak and mean load per CPU during the run (`load` is null where the OS gives no load average, such as Windows). A peak above 1 means the machine was overloaded and a timeout may come from that.
+- **Timeouts**: each test that failed on its own timeout or on the timeout of a hook that runs for it (`beforeEach`, `afterEach`), in shared and separate units alike. A `beforeAll` or `afterAll` timeout fails its file but is not listed. Shown with the peak and mean load per CPU during the run (`load` is null where the OS gives no load average, such as Windows). A peak above 1 means the machine was overloaded and a timeout may come from that.
 - **Failed separate units**, and units that produced no report.
 - In shadow mode, `missedFailingFiles`, and recall of observed failures. An all-green run reports `no-failures-observed` with `null` recall, never "100% safe".
 
