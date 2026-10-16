@@ -80,3 +80,10 @@ export interface RunReport {
   estimatedSelectedDurationFraction: number | null
   exitCode: number
 }
+export interface WorkspacePackage {
+  name: string
+  dir: string
+  kind: 'vitest' | 'script' | 'none'
+  vitestConfig: string | null
+  testScript: string | null
+}
