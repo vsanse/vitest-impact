@@ -69,7 +69,7 @@ export class VitestAdapter {
       experimental: { recordDependencies: false },
     }, overrides)
     try {
-      if (!packages && context.projects.length !== 1) throw new Error('MVP supports exactly one Vitest project. Run each project separately with an outer concurrency budget.')
+      if (!packages && context.projects.length !== 1) throw new Error('A root Vitest config with several projects (test.projects) is not supported yet. Run each project separately with an outer concurrency budget.')
       const cfg = context.config
       if (cfg.changed || cfg.related || cfg.shard || cfg.testNamePattern || cfg.tagsFilter?.length || cfg.project?.length) {
         throw new Error('Remove Vitest changed/related/shard/project/name/tag filters: vitest-impact must discover the entire configured suite.')

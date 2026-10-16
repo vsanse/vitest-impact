@@ -153,6 +153,7 @@ The selection uses Git changes from `--base` to the working tree (committed, sta
 - Shadow mode runs everything, so it cannot hide a failure; it only tells you whether the selection would have.
 - There is **no universal completeness guarantee** for unrestricted JavaScript. It does not follow dynamic imports, filesystem reads, `.env` edits, external services, or generated files outside Git. Links between workspace packages (through `dist`, the optimizer or a workspace link) are not tracked yet, so a source change in a package that another package in the run depends on runs the full set. Old import graphs are not rebuilt, so deletions run the full set. No dependency records are kept between runs yet. Keep your full-suite gates and use shadow mode first.
 - A base is only checked to be an ancestor. Git does not prove the base passed its tests.
+- A root Vitest config with several projects (`test.projects`) is not supported yet (exit 2). Workspace mode uses each package's own config instead.
 - Concurrent edits during a run are not supported.
 
 ### Vitest internals it depends on

@@ -140,7 +140,7 @@ test('filters need a workspace, and must leave a package with tests', async () =
   } })
   const none = await invoke(scriptless.root, ['plan'])
   expect(none.code).toBe(2)
-  expect(none.output).toContain('No workspace package has a Vitest test script. Use --vitest-config for a suite run from one root config.')
+  expect(none.output).toContain('No workspace package has a Vitest test script. --vitest-config runs a root Vitest config with one project; a root config with several projects (test.projects) is not supported yet.')
 })
 
 test('an isolated package runs in its own process and joins the report', async () => {

@@ -214,3 +214,11 @@ test("a single project that sets no maxWorkers gets the budget, not Vitest's def
   expect(run.plan.resources.maxWorkers).toBe(run.plan.resources.availableCpu)
   expect(run.plan.resources.warnings.join(' ')).not.toContain('Preserved')
 })
+
+test('a root Vitest config with several projects is refused with a message that says so', async () => {
+  const { root } = await fixture()
+  await put(root, 'vitest.config.ts', "import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { projects: [{ test: { name: 'one', include: ['test/math.test.ts'] } }, { test: { name: 'two', include: ['test/strings.test.ts'] } }] } })\n")
+  const run = await invoke(root, ['plan', '--vitest-config', 'vitest.config.ts'])
+  expect(run.code).toBe(2)
+  expect(run.output).toContain('A root Vitest config with several projects (test.projects) is not supported yet.')
+})
