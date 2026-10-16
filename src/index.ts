@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { rm } from 'node:fs/promises'
-import { VitestAdapter, SUPPORTED_VITEST } from './adapter.js'
+import { VitestAdapter } from './adapter.js'
 import { loadConfig } from './config.js'
 import { changedFiles, localPath, workspaceFingerprint } from './git.js'
 import { selectTests } from './planner.js'
@@ -44,6 +44,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
   const adapter = await VitestAdapter.open(root, resources, options.vitestConfig)
   try {
     const forced: string[] = []
+    if (adapter.versionWarning) forced.push(adapter.versionWarning)
     if (options.mode === 'full') forced.push('explicit-full-run')
     if (!loaded.found) forced.push('no-impact-config: configure input ownership before selecting tests')
     if (adapter.context.config.coverage.enabled) forced.push('coverage-enabled: preserve complete-suite coverage')
@@ -53,7 +54,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
       forceReasons: forced, related: paths => adapter.related(paths),
     })
     const plan: Plan = {
-      schemaVersion: 1, toolVersion: '0.1.0', vitestVersion: SUPPORTED_VITEST,
+      schemaVersion: 1, toolVersion: '0.1.0', vitestVersion: adapter.version,
       nodeVersion: process.version, root, createdAt: new Date().toISOString(), git,
       configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection, resources,
       planningMs: performance.now() - start,

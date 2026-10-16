@@ -3,17 +3,17 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { TestSpecification, Vitest, TestRunResult } from 'vitest/node'
 import { localPath } from './git.js'
+import { versionPolicy } from './version.js'
 import type { FileResult, ResourceBudget, TestFile } from './types.js'
 
-export const SUPPORTED_VITEST = '5.0.5'
-
 export class VitestAdapter {
-  private constructor(readonly context: Vitest, readonly root: string, readonly specs: TestSpecification[]) {}
+  private constructor(readonly context: Vitest, readonly root: string, readonly specs: TestSpecification[], readonly version: string, readonly versionWarning?: string) {}
 
   static async open(root: string, budget: ResourceBudget, config?: string): Promise<VitestAdapter> {
     const require = createRequire(resolve(root, 'package.json'))
     const pkg = require('vitest/package.json') as { version: string }
-    if (pkg.version !== SUPPORTED_VITEST) throw new Error(`Unsupported Vitest ${pkg.version}. This adapter is tested only with ${SUPPORTED_VITEST}.`)
+    const policy = versionPolicy(pkg.version)
+    if (!policy.ok) throw new Error(policy.error)
     const { createVitest } = await import(pathToFileURL(require.resolve('vitest/node')).href) as typeof import('vitest/node')
     const context = await createVitest({
       root,
@@ -49,7 +49,7 @@ export class VitestAdapter {
       project.config.allowOnly = false
       const specs = await context.globTestSpecifications()
       if (!specs.length) throw new Error('No test files discovered. Refusing an empty successful run.')
-      return new VitestAdapter(context, root, specs)
+      return new VitestAdapter(context, root, specs, pkg.version, policy.selection ? undefined : policy.warning)
     } catch (error) { await context.close(); throw error }
   }
 
