@@ -67,6 +67,26 @@ describe('workspace', () => {
     expect(filterPackages(pkgs, ['@x/b']).map(p => p.name)).toEqual(['@x/b'])
     expect(filterPackages(pkgs, ['./packages/*']).map(p => p.name)).toEqual(['@x/a', '@x/b', '@x/d', '@x/e'])
     expect(() => filterPackages(pkgs, ['@x/zzz'])).toThrow('Filter matches no package: @x/zzz')
-    expect(() => filterPackages(pkgs, ['!@x/zzz'])).toThrow('Filter matches no package: !@x/zzz')
+    expect(filterPackages(pkgs, ['!@x/zzz']).map(p => p.name)).toEqual(['@x/a', '@x/b', '@x/d', '@x/e'])
+  })
+
+  test('unindented pnpm list, and a pnpm file with no packages list', async () => {
+    const root = await make()
+    await put(root, 'pnpm-workspace.yaml', "packages:\n- 'packages/*'\n- \"apps/*\"\nother:\n- x\n")
+    await pkg(root, 'packages/a', { name: 'a', scripts: { test: 'vitest' } }, 'vitest.config.ts')
+    await pkg(root, 'apps/b', { name: 'b', scripts: { test: 'vitest' } }, 'vitest.config.ts')
+    expect((await discoverPackages(root)).map(p => p.dir)).toEqual(['apps/b', 'packages/a'])
+    for (const text of ['onlyBuiltDependencies:\n  - esbuild\n', "packages: ['packages/*']\n"]) {
+      const bad = await make()
+      await put(bad, 'pnpm-workspace.yaml', text)
+      await expect(discoverPackages(bad)).rejects.toThrow('pnpm-workspace.yaml has no packages list')
+    }
+  })
+
+  test('a malformed package.json in a workspace package throws', async () => {
+    const root = await make()
+    await put(root, 'package.json', JSON.stringify({ workspaces: ['packages/*'] }))
+    await put(root, 'packages/a/package.json', '{ not json')
+    await expect(discoverPackages(root)).rejects.toThrow('Invalid package.json: packages/a/package.json')
   })
 })

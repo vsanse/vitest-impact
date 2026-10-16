@@ -7,8 +7,14 @@ const CONFIG_BASES = ['vitest.config', 'vite.config']
 const CONFIG_EXTS = ['ts', 'mts', 'cts', 'js', 'mjs', 'cjs']
 
 const exists = (path: string) => access(path).then(() => true, () => false)
-const readJson = async (path: string): Promise<Record<string, unknown> | null> => {
-  try { return JSON.parse(await readFile(path, 'utf8')) } catch { return null }
+const isMissing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
+const readJson = async (path: string, shown: string): Promise<Record<string, unknown> | null> => {
+  let text: string
+  try { text = await readFile(path, 'utf8') } catch (error) {
+    if (isMissing(error)) return null
+    throw error
+  }
+  try { return JSON.parse(text) } catch { throw new Error(`Invalid package.json: ${shown}`) }
 }
 
 // ponytail: line parser for the packages: list only; use a YAML parser if real files break it.
@@ -16,17 +22,25 @@ function pnpmPackages(text: string): string[] {
   const globs: string[] = []
   let inside = false
   for (const line of text.split(/\r?\n/)) {
-    if (/^\S/.test(line)) { inside = /^packages\s*:/.test(line); continue }
+    if (/^[^\s#-]/.test(line)) { inside = /^packages\s*:/.test(line); continue }
     if (!inside) continue
-    const item = /^\s+-\s+(?:'([^']*)'|"([^"]*)"|([^#\s][^#]*?))\s*(?:#.*)?$/.exec(line)
+    const item = /^\s*-\s+(?:'([^']*)'|"([^"]*)"|([^#\s][^#]*?))\s*(?:#.*)?$/.exec(line)
     if (item) globs.push(item[1] ?? item[2] ?? item[3]!)
   }
   return globs
 }
 
 async function workspaceGlobs(root: string): Promise<string[] | null> {
-  try { return pnpmPackages(await readFile(resolve(root, 'pnpm-workspace.yaml'), 'utf8')) } catch { /* no pnpm file */ }
-  const workspaces = (await readJson(resolve(root, 'package.json')))?.workspaces
+  let yaml: string | null = null
+  try { yaml = await readFile(resolve(root, 'pnpm-workspace.yaml'), 'utf8') } catch (error) {
+    if (!isMissing(error)) throw error
+  }
+  if (yaml !== null) {
+    const globs = pnpmPackages(yaml)
+    if (!globs.length) throw new Error('pnpm-workspace.yaml has no packages list')
+    return globs
+  }
+  const workspaces = (await readJson(resolve(root, 'package.json'), 'package.json'))?.workspaces
   if (Array.isArray(workspaces)) return workspaces.map(String)
   const nested = (workspaces as { packages?: unknown } | undefined)?.packages
   return Array.isArray(nested) ? nested.map(String) : null
@@ -48,7 +62,7 @@ async function packageFolders(root: string): Promise<string[]> {
 }
 
 async function describePackage(root: string, dir: string): Promise<WorkspacePackage> {
-  const json = await readJson(resolve(root, dir, 'package.json'))
+  const json = await readJson(resolve(root, dir, 'package.json'), dir === '.' ? 'package.json' : `${dir}/package.json`)
   const scripts = (json?.scripts ?? {}) as Record<string, unknown>
   const testScript = typeof scripts.test === 'string' ? scripts.test.trim() : null
   let vitestConfig: string | null = null
@@ -92,7 +106,6 @@ export function filterPackages(packages: WorkspacePackage[], filters: string[]):
   for (const token of positive) if (!hit(token).length) throw new Error(`Filter matches no package: ${token}`)
   for (const token of negative) {
     const matched = hit(token.slice(1))
-    if (!matched.length) throw new Error(`Filter matches no package: ${token}`)
     matched.forEach(p => picked.delete(p))
   }
   return packages.filter(p => picked.has(p) && p.kind !== 'none')
