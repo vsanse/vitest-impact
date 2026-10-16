@@ -79,13 +79,15 @@ export async function makeWorkspaceFixture(options = {}) {
   return makeRepo('vitest-impact-ws-', { ...files, ...options.packages })
 }
 
-export async function invoke(root, args, timeout = 30_000) {
+// `extraEnv` adds variables; a key set to undefined is removed.
+export async function invoke(root, args, timeout = 30_000, extraEnv = {}) {
   let code = 0
   let output = ''
   const env = { ...process.env, CI: 'true', NO_COLOR: '1' }
   delete env.GITHUB_STEP_SUMMARY
   // Start the CLI as a shell would: without the variables Vitest set for this test run.
   for (const key of Object.keys(env)) if (key === 'TEST' || key === 'NODE_ENV' || key.startsWith('VITEST')) delete env[key]
+  for (const [key, value] of Object.entries(extraEnv)) { if (value === undefined) delete env[key]; else env[key] = value }
   try {
     const result = await exec(process.execPath, [cli, ...args], { cwd: root, env, timeout, maxBuffer: 2 * 1024 * 1024 })
     output = result.stdout + result.stderr

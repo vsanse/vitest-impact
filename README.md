@@ -79,7 +79,7 @@ A Vitest package runs in its own Vitest process, with its own settings, when the
 | `coverage` | Coverage is on in the package config. The package runs alone, in full (under `--shard`, whole in one shard), with its own thresholds. |
 | `fs-module-cache-off` | The package sets `fsModuleCache: false`, which a shared run cannot honor for one package only. |
 
-A separate package keeps its own result: if its process exits non-zero, the run exits 1, even if every test passed (coverage thresholds, unhandled errors). Separate units run one after another.
+A separate package keeps its own result: if its process exits non-zero, the run exits 1, even if every test passed (coverage thresholds, unhandled errors). Separate units run one after another. Like the shared run, they never allow `.only` (`--allowOnly=false`), in CI or not.
 
 ## The `isolated` list and `check`
 

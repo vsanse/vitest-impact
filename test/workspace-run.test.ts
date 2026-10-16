@@ -494,3 +494,15 @@ test('shared and separate packages see the variables and PATH that npm run test 
   expect(run.code, run.output).toBe(0)
   expect(run.report.executed.filter(t => t.file.endsWith('/npm.test.ts')).map(t => [t.project, t.state]).sort()).toEqual([['@w/a', 'passed'], ['@w/b', 'passed']])
 })
+
+test('test.only fails in a separate unit as in the shared run, also outside CI', async () => {
+  const only = "import { test } from 'vitest'; test.only('focused', () => {}); test('other', () => {})\n"
+  const { root } = await workspaceFixture({ packages: {
+    'packages/a/test/only.test.ts': only, 'packages/b/test/only.test.ts': only,
+    'packages/b/vitest.config.ts': config("pool: 'threads'"),
+  } })
+  // Vitest allows .only by default outside CI, so CI is unset here.
+  const run = await invoke(root, ['run', '--mode', 'full'], 60_000, { CI: undefined, GITHUB_ACTIONS: undefined })
+  expect(run.code, run.output).toBe(1)
+  expect(run.report.executed.filter(t => t.file.endsWith('/only.test.ts')).map(t => [t.project, t.state]).sort()).toEqual([['@w/a', 'failed'], ['@w/b', 'failed']])
+})

@@ -100,7 +100,7 @@ export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: 
     await mkdir(outDir, { recursive: true })
     const out = resolve(outDir, `${encodeURIComponent(unit.package)}.json`)
     await rm(out, { force: true })
-    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, `--fsModuleCachePath=${resolve(root, '.vitest-impact', 'cache', 'modules')}`, ...unit.files], cwd, { ...startEnv, ...packageEnv(root, unit.dir) }))
+    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--allowOnly=false', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, `--fsModuleCachePath=${resolve(root, '.vitest-impact', 'cache', 'modules')}`, ...unit.files], cwd, { ...startEnv, ...packageEnv(root, unit.dir) }))
     // No usable report: the planned files become missingFiles, and the cause is recorded.
     let text: string | null = null
     try { text = await readFile(out, 'utf8') } catch { errors.push(`${unit.package}: no JSON report`) }
