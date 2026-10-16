@@ -56,6 +56,8 @@ export interface Plan {
   separate: { package: string; reason: string }[]
   /** Packages whose test script runs as-is. */
   scripts: string[]
+  /** Vitest packages with no test files whose config sets passWithNoTests; left out of the run. */
+  emptyPackages: string[]
   resources: ResourceBudget
   planningMs: number
   warnings: string[]

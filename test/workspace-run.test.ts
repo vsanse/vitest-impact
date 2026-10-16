@@ -26,6 +26,7 @@ test('--filter narrows packages; a filter that matches nothing exits 2', async (
   const { root } = await workspaceFixture()
   const only = await invoke(root, ['run', '--mode', 'full', '--filter', '@w/b'])
   expect(only.code, only.output).toBe(0)
+  expect(only.report.executed).toHaveLength(3)
   expect(only.report.executed.every(t => t.file.startsWith('packages/b/'))).toBe(true)
   const none = await invoke(root, ['run', '--mode', 'full', '--filter', '@w/nope'])
   expect(none.code).toBe(2)
@@ -66,15 +67,48 @@ test('structural packages and script packages are planned outside the shared run
 })
 
 test('a package keeps its own lower worker limit without lowering the budget', async () => {
-  const { root } = await workspaceFixture({
-    config: { resources: { maxWorkers: 3, workerMemoryMb: 128, reserveMemoryMb: 128 } },
-    packages: { 'packages/a/vitest.config.ts': config('maxWorkers: 2') },
-  })
+  // isolate: false, because Vitest already runs an isolated 1-worker project in a group of its own.
+  const { root } = await workspaceFixture({ packages: { 'packages/a/vitest.config.ts': config('maxWorkers: 1, isolate: false') } })
   const run = await invoke(root, ['run', '--mode', 'full'])
   expect(run.code, run.output).toBe(0)
   expect(run.report.executed).toHaveLength(6)
-  expect(run.plan.resources.maxWorkers).toBe(3)
-  expect(run.plan.resources.warnings).toContain("Kept @w/a's 2-worker limit.")
+  expect(run.plan.resources.maxWorkers).toBe(2)
+  expect(run.plan.resources.warnings).toContain("Kept @w/a's 1-worker limit.")
+})
+
+test('packages that reuse workers (isolate: false) still run in their own folders', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/a/vitest.config.ts': config('isolate: false'),
+    'packages/b/vitest.config.ts': config('isolate: false'),
+  } })
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.report.executed.filter(t => t.file.endsWith('/cwd.test.ts')).map(t => [t.file, t.state])).toEqual([
+    ['packages/a/test/cwd.test.ts', 'passed'], ['packages/b/test/cwd.test.ts', 'passed'],
+  ])
+})
+
+test('a package with coverage enabled in its own config runs in its own process', async () => {
+  const { root } = await workspaceFixture({ packages: { 'packages/b/vitest.config.ts': config('coverage: { enabled: true }') } })
+  const plan = await invoke(root, ['plan'])
+  expect(plan.code, plan.output).toBe(0)
+  expect(plan.plan.separate).toEqual([{ package: '@w/b', reason: 'coverage' }])
+})
+
+test('a package with no test files is left out only when its config sets passWithNoTests', async () => {
+  const empty = (config: string) => ({
+    'packages/c/package.json': JSON.stringify({ name: '@w/c', type: 'module', scripts: { test: 'vitest run' } }),
+    'packages/c/vitest.config.ts': config,
+  })
+  const { root } = await workspaceFixture({ packages: empty(config('passWithNoTests: true')) })
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.plan.emptyPackages).toEqual(['@w/c'])
+  expect(run.report.executed).toHaveLength(6)
+  const strict = await workspaceFixture({ packages: empty(config('')) })
+  const failed = await invoke(strict.root, ['plan'])
+  expect(failed.code).toBe(2)
+  expect(failed.output).toContain('No test files discovered in @w/c')
 })
 
 test('selection maps a changed source file to its own package tests', async () => {
@@ -95,4 +129,11 @@ test('filters need a workspace, and must leave a package with tests', async () =
   const empty = await invoke(root, ['plan', '--filter', '!@w/a', '--filter', '!@w/b'])
   expect(empty.code).toBe(2)
   expect(empty.output).toContain('No package with tests matches the filters')
+  const scriptless = await workspaceFixture({ packages: {
+    'packages/a/package.json': JSON.stringify({ name: '@w/a' }),
+    'packages/b/package.json': JSON.stringify({ name: '@w/b' }),
+  } })
+  const none = await invoke(scriptless.root, ['plan'])
+  expect(none.code).toBe(2)
+  expect(none.output).toContain('No workspace package has a Vitest test script. Use --vitest-config for a suite run from one root config.')
 })

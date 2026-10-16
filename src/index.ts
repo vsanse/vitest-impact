@@ -63,7 +63,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
       nodeVersion: process.version, root, createdAt: new Date().toISOString(), git,
       configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection,
       packages: packages?.map(p => p.name) ?? [], separate: adapter.separate(),
-      scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], resources,
+      scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], emptyPackages: adapter.emptyPackages, resources,
       planningMs: performance.now() - start,
       warnings: [
         'Selection assumes sourcePatterns use statically resolvable dependencies; declare other inputs or force a full run.',
@@ -114,6 +114,9 @@ async function workspacePackages(root: string, options: Options): Promise<Worksp
     return null
   }
   const packages = filterPackages(found, filters)
-  if (!packages.length) throw new Error('No package with tests matches the filters')
+  if (!packages.length) {
+    throw new Error(filters.length ? 'No package with tests matches the filters'
+      : 'No workspace package has a Vitest test script. Use --vitest-config for a suite run from one root config.')
+  }
   return packages
 }

@@ -53,6 +53,11 @@ reason `global-setup` and runs in its own process.
 - Whether a config sets `maxWorkers` is only visible in the untyped `config.providedOptions`. A
   project that does not set it resolves to Vitest's default (CPU count minus one), which the adapter
   replaces with the tool's budget. If `providedOptions` is missing, the adapter keeps the lower value.
+- Vitest copies the root `coverage` into every project and applies the CLI `passWithNoTests` to every
+  project, so a package's own values are lost after `createVitest`. The adapter reads them from the
+  package config file (Vite `loadConfigFromFile`, a second load of the file): `coverage.enabled` gives
+  the separate reason `coverage`; `passWithNoTests: true` lets a package with no test files be left
+  out (`plan.emptyPackages`) instead of failing the run.
 - Vitest names a file project after its `package.json` name. The tool does not rely on that: it maps
   each project to the discovered package that holds its root.
 
@@ -60,5 +65,9 @@ reason `global-setup` and runs in its own process.
 
 - A package config that reads `process.cwd()` while it loads (for example in `include`) sees the repo
   root, not the package folder. The spike did not cover this.
+- Vite plugins run in the main process. A plugin that calls `process.cwd()` while it transforms a file
+  sees the repo root, not the package folder.
 - With the root `config: false`, settings that Vitest takes only from the root config (for example
-  `coverage`, `reporters`, `teardownTimeout`, `onConsoleLog`) come from the tool, not from a package config.
+  `reporters`, `teardownTimeout`, `onConsoleLog`) come from the tool, not from a package config.
+  `coverage` is handled (reason `coverage`), but only as the config file sets it: a Vite plugin that
+  turns coverage on in its `config` hook is not seen by the second load.

@@ -10,15 +10,19 @@ import type { FileResult, ResourceBudget, TestFile, WorkspacePackage } from './t
 const CWD_SHIM = fileURLToPath(new URL('./cwd-shim.js', import.meta.url))
 // Vitest 5.0.5 resolves these per project but leaves them out of the ResolvedConfig type.
 type Untyped = { fileParallelism?: boolean; providedOptions?: { maxWorkers?: boolean } }
+type OwnTestConfig = NonNullable<ViteUserConfig['test']>
+type ViteLoader = { loadConfigFromFile(env: { command: 'serve'; mode: string }, file: string, root: string, logLevel: 'silent'): Promise<{ config: ViteUserConfig } | null> }
 
 /** Why a project cannot share this process, or null. See docs/decisions/cwd-parity.md. */
-function separateReason(project: TestProject): string | null {
+function separateReason(project: TestProject, own: OwnTestConfig): string | null {
   const config = project.config
   if (config.browser.enabled) return 'browser'
   if (config.typecheck.enabled) return 'typecheck'
   if (config.pool !== 'forks') return `pool:${config.pool}`
   if ((config as Untyped).fileParallelism === false) return 'file-parallelism-off'
   if ([config.globalSetup].flat().length) return 'global-setup'
+  // Coverage is a root-only Vitest option: the shared process would drop the package's own.
+  if (own.coverage?.enabled) return 'coverage'
   return null
 }
 
@@ -26,6 +30,7 @@ export class VitestAdapter {
   private constructor(
     readonly context: Vitest, readonly root: string, readonly specs: TestSpecification[],
     private readonly owners: Map<TestProject, WorkspacePackage>, private readonly separated: { package: string; reason: string }[],
+    readonly emptyPackages: string[],
     readonly version: string, readonly versionWarning?: string,
   ) {}
 
@@ -61,6 +66,7 @@ export class VitestAdapter {
       }
       const owners = new Map<TestProject, WorkspacePackage>()
       let separated: { package: string; reason: string }[] = []
+      let passWithNoTests = new Set<WorkspacePackage>()
       if (!packages) {
         const project = context.projects[0]!
         if (!['forks', 'threads'].includes(String(project.config.pool)) || project.config.browser.enabled || project.config.typecheck.enabled) {
@@ -76,6 +82,12 @@ export class VitestAdapter {
         project.config.maxWorkers = budget.maxWorkers
         project.config.allowOnly = false
       } else {
+        // Vitest gives every project the root coverage and the CLI passWithNoTests, so read both from the package's own config.
+        const vite = await import(pathToFileURL(createRequire(require.resolve('vitest/package.json')).resolve('vite')).href) as ViteLoader
+        const own = new Map(await Promise.all(packages.map(async p => {
+          const loaded = await vite.loadConfigFromFile({ command: 'serve', mode: 'test' }, resolve(root, p.vitestConfig!), resolve(root, p.dir), 'silent')
+          return [p, loaded?.config.test ?? {}] as const
+        })))
         // Name each project after the discovered package that holds its root, not Vitest's default name.
         const reasons = new Map<WorkspacePackage, string>()
         for (const project of context.projects) {
@@ -83,10 +95,11 @@ export class VitestAdapter {
           const owner = packages.filter(p => dir === p.dir || dir.startsWith(`${p.dir}/`)).sort((a, b) => b.dir.length - a.dir.length)[0]
           if (!owner) throw new Error(`Vitest project root is outside every package: ${dir}`)
           owners.set(project, owner)
-          const reason = separateReason(project)
+          const reason = separateReason(project, own.get(owner)!)
           if (reason && !reasons.has(owner)) reasons.set(owner, reason)
         }
         separated = packages.filter(p => reasons.has(p)).map(p => ({ package: p.name, reason: reasons.get(p)! }))
+        passWithNoTests = new Set(packages.filter(p => own.get(p)!.passWithNoTests === true))
         cfg.maxWorkers = budget.maxWorkers
         const shared = context.projects.filter(project => !reasons.has(owners.get(project)!))
         for (const project of shared) {
@@ -113,8 +126,11 @@ export class VitestAdapter {
       }
       const specs = await context.globTestSpecifications()
       if (!specs.length) throw new Error('No test files discovered. Refusing an empty successful run.')
-      for (const p of packages ?? []) if (!specs.some(spec => owners.get(spec.project) === p)) throw new Error(`No test files discovered in ${p.name}. Refusing an empty successful run.`)
-      return new VitestAdapter(context, root, specs, owners, separated, pkg.version, policy.selection ? undefined : policy.warning)
+      const empty = (packages ?? []).filter(p => !specs.some(spec => owners.get(spec.project) === p))
+      for (const p of empty) if (!passWithNoTests.has(p)) throw new Error(`No test files discovered in ${p.name}. Refusing an empty successful run.`)
+      const emptyPackages = empty.map(p => p.name)
+      separated = separated.filter(s => !emptyPackages.includes(s.package))
+      return new VitestAdapter(context, root, specs, owners, separated, emptyPackages, pkg.version, policy.selection ? undefined : policy.warning)
     } catch (error) { await context.close(); throw error }
   }
 
