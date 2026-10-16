@@ -10,6 +10,8 @@ export interface ImpactConfig {
   forceFull: string[]
   ignore: string[]
   alwaysRun: string[]
+  /** Package names that always run in their own Vitest process. */
+  isolated: string[]
   resources: {
     maxWorkers?: number
     memoryBudgetMb?: number
@@ -65,6 +67,7 @@ export interface Plan {
 export interface FileResult {
   id: string
   file: string
+  project: string
   state: string
   durationMs: number
   passed: number
@@ -72,11 +75,13 @@ export interface FileResult {
   skipped: number
   pending: number
 }
+export interface PackageResult { name: string; mode: 'shared' | 'separate' | 'script'; exitCode: number | null; durationMs: number }
 export interface RunReport {
   schemaVersion: 1
   mode: 'shadow' | 'selected' | 'full'
   plan: Plan
   executed: FileResult[]
+  packages: PackageResult[]
   unhandledErrors: string[]
   runLevelFailure: boolean
   executionMs: number

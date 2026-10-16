@@ -22,7 +22,7 @@ function patterns(value: unknown, label: string): string[] {
 
 export function parseConfig(value: unknown): ImpactConfig {
   const data = object(value, 'Config')
-  keys(data, ['version', 'sourcePatterns', 'inputs', 'forceFull', 'ignore', 'alwaysRun', 'resources'], 'config')
+  keys(data, ['version', 'sourcePatterns', 'inputs', 'forceFull', 'ignore', 'alwaysRun', 'isolated', 'resources'], 'config')
   if (data.version !== 1) throw new Error('Config version must be 1')
   const resources = object(data.resources ?? {}, 'resources')
   keys(resources, ['maxWorkers', 'memoryBudgetMb', 'workerMemoryMb', 'reserveMemoryMb'], 'resources')
@@ -38,6 +38,8 @@ export function parseConfig(value: unknown): ImpactConfig {
     if (!files.length || !tests.length) throw new Error('Each input rule needs files and tests')
     return { files, tests }
   })
+  const isolated = data.isolated ?? []
+  if (!Array.isArray(isolated) || isolated.some(n => typeof n !== 'string' || !n)) throw new Error('isolated must be an array of package names')
   return {
     version: 1,
     sourcePatterns: patterns(data.sourcePatterns, 'sourcePatterns'),
@@ -45,6 +47,7 @@ export function parseConfig(value: unknown): ImpactConfig {
     forceFull: patterns(data.forceFull, 'forceFull'),
     ignore: patterns(data.ignore, 'ignore'),
     alwaysRun: patterns(data.alwaysRun, 'alwaysRun'),
+    isolated: isolated as string[],
     resources: resources as ImpactConfig['resources'],
   }
 }

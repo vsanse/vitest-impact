@@ -34,7 +34,7 @@ export class VitestAdapter {
     readonly version: string, readonly versionWarning?: string,
   ) {}
 
-  static async open(root: string, budget: ResourceBudget, options: { vitestConfig?: string; packages?: WorkspacePackage[] } = {}): Promise<VitestAdapter> {
+  static async open(root: string, budget: ResourceBudget, options: { vitestConfig?: string; packages?: WorkspacePackage[]; isolated?: string[] } = {}): Promise<VitestAdapter> {
     const require = createRequire(resolve(root, 'package.json'))
     const pkg = require('vitest/package.json') as { version: string }
     const policy = versionPolicy(pkg.version)
@@ -95,7 +95,7 @@ export class VitestAdapter {
           const owner = packages.filter(p => dir === p.dir || dir.startsWith(`${p.dir}/`)).sort((a, b) => b.dir.length - a.dir.length)[0]
           if (!owner) throw new Error(`Vitest project root is outside every package: ${dir}`)
           owners.set(project, owner)
-          const reason = separateReason(project, own.get(owner)!)
+          const reason = options.isolated?.includes(owner.name) ? 'isolated-in-config' : separateReason(project, own.get(owner)!)
           if (reason && !reasons.has(owner)) reasons.set(owner, reason)
         }
         separated = packages.filter(p => reasons.has(p)).map(p => ({ package: p.name, reason: reasons.get(p)! }))
@@ -168,7 +168,7 @@ export class VitestAdapter {
     return result.testModules.map(module => {
       const counts = { passed: 0, failed: 0, skipped: 0, pending: 0 }
       for (const test of module.children.allTests()) counts[test.result().state]++
-      return { id: module.id, file: localPath(this.root, module.moduleId), state: module.state(), durationMs: module.diagnostic().duration, ...counts }
+      return { id: module.id, file: localPath(this.root, module.moduleId), project: this.owners.get(module.project)?.name ?? module.project.name, state: module.state(), durationMs: module.diagnostic().duration, ...counts }
     })
   }
   close(): Promise<void> { return this.context.close() }

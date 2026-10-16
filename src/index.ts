@@ -9,7 +9,8 @@ import { budgetResources } from './resources.js'
 import { analyzeRun, writeJson, writeSummary } from './report.js'
 import { withRunLock } from './lock.js'
 import { discoverPackages, filterPackages } from './workspace.js'
-import type { ImpactConfig, Plan, RunReport, WorkspacePackage } from './types.js'
+import { runSeparate } from './separate.js'
+import type { FileResult, ImpactConfig, PackageResult, Plan, RunReport, WorkspacePackage } from './types.js'
 
 export type { ImpactConfig, Plan, RunReport } from './types.js'
 export { selectTests } from './planner.js'
@@ -43,27 +44,40 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
   const git = await changedFiles(root, options.base)
   const extra = [loaded.path, ...(options.vitestConfig ? [resolve(root, options.vitestConfig)] : [])]
   const fingerprint = await workspaceFingerprint(root, extra)
-  const packages = await workspacePackages(root, options)
-  const adapter = await VitestAdapter.open(root, resources, packages
-    ? { packages: packages.filter(p => p.kind === 'vitest') }
-    : options.vitestConfig ? { vitestConfig: options.vitestConfig } : {})
+  const packages = await workspacePackages(root, options, loaded.config.isolated)
+  const vitestPackages = packages?.filter(p => p.kind === 'vitest') ?? []
+  // With no Vitest package (only scripts), createVitest would throw "No projects were found".
+  const adapter = packages && !vitestPackages.length ? null
+    : await VitestAdapter.open(root, resources, packages
+      ? { packages: vitestPackages, isolated: loaded.config.isolated }
+      : options.vitestConfig ? { vitestConfig: options.vitestConfig } : {})
   try {
     const forced: string[] = []
-    if (adapter.versionWarning) forced.push(adapter.versionWarning)
+    if (adapter?.versionWarning) forced.push(adapter.versionWarning)
     if (options.mode === 'full') forced.push('explicit-full-run')
     if (!loaded.found) forced.push('no-impact-config: configure input ownership before selecting tests')
-    if (adapter.context.config.coverage.enabled) forced.push('coverage-enabled: preserve complete-suite coverage')
-    const selection = await selectTests({
+    if (adapter?.context.config.coverage.enabled) forced.push('coverage-enabled: preserve complete-suite coverage')
+    const selection = adapter ? await selectTests({
       tests: adapter.tests(), git, config: loaded.config,
       protectedFiles: extra.map(file => localPath(root, file)),
       forceReasons: forced, related: paths => adapter.related(paths),
-    })
+    }) : { mode: 'full' as const, fallbackReasons: [...forced], ignoredChanges: [], decisions: [] }
+    const separate = adapter?.separate() ?? []
+    // A package with its own coverage settings always runs in full, so its coverage and thresholds stay complete.
+    const coveragePackages = new Set(separate.filter(s => s.reason === 'coverage').map(s => s.package))
+    for (const test of selection.decisions) {
+      if (!coveragePackages.has(test.project)) continue
+      test.selected = true
+      test.reasons = [...test.reasons.filter(r => !r.startsWith('not-selected')), 'coverage: package runs in full']
+    }
+    const selectedCount = selection.decisions.filter(t => t.selected).length
+    selection.mode = selectedCount === selection.decisions.length ? 'full' : selectedCount ? 'selective' : 'empty'
     const plan: Plan = {
-      schemaVersion: 1, toolVersion: '0.1.0', vitestVersion: adapter.version,
+      schemaVersion: 1, toolVersion: '0.1.0', vitestVersion: adapter?.version ?? 'n/a',
       nodeVersion: process.version, root, createdAt: new Date().toISOString(), git,
       configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection,
-      packages: packages?.map(p => p.name) ?? [], separate: adapter.separate(),
-      scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], emptyPackages: adapter.emptyPackages, resources,
+      packages: packages?.map(p => p.name) ?? [], separate,
+      scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], emptyPackages: adapter?.emptyPackages ?? [], resources,
       planningMs: performance.now() - start,
       warnings: [
         'Selection assumes sourcePatterns use statically resolvable dependencies; declare other inputs or force a full run.',
@@ -81,38 +95,70 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     plan.planningMs = performance.now() - start
     await writeJson(resolve(output, 'plan.json'), plan)
     if (options.command === 'plan') return { plan }
-    if (plan.separate.length || plan.scripts.length) throw new Error('Separate execution is not implemented')
     const mode = options.mode ?? 'shadow'
-    const ids = new Set(plan.decisions.filter(t => mode !== 'selected' || t.selected).map(t => t.id))
+    const wanted = (t: { selected: boolean }) => mode !== 'selected' || t.selected
+    const ids = new Set(plan.decisions.filter(wanted).map(t => t.id))
     const runStart = performance.now()
     let report: RunReport
     try {
-      const result = await adapter.run(ids)
-      const files = adapter.results(result)
-      // Global teardown can set Vitest's failure status. Finish it before publishing results.
-      await adapter.close()
-      report = analyzeRun(plan, mode, files, result.unhandledErrors.map(error => error instanceof Error ? error.message : String(error)), performance.now() - runStart, Number(process.exitCode ?? 0) !== 0)
+      const files: FileResult[] = []
+      const unhandled: string[] = []
+      const results: PackageResult[] = []
+      let runLevelFailure = false
+      // The shared run covers the packages that are not separate (run() skips the separate ones). With none left it is skipped.
+      if (adapter) {
+        const result = await adapter.run(ids)
+        files.push(...adapter.results(result))
+        unhandled.push(...result.unhandledErrors.map(error => error instanceof Error ? error.message : String(error)))
+        // Global teardown can set Vitest's failure status. Finish it before publishing results.
+        await adapter.close()
+        runLevelFailure = Number(process.exitCode ?? 0) !== 0
+        for (const name of new Set(files.map(f => f.project))) {
+          results.push({ name, mode: 'shared', exitCode: null, durationMs: files.filter(f => f.project === name).reduce((sum, f) => sum + f.durationMs, 0) })
+        }
+      }
+      const outDir = resolve(output, 'separate')
+      for (const pkg of packages ?? []) {
+        const apart = plan.separate.some(s => s.package === pkg.name)
+        if (pkg.kind === 'none' || (pkg.kind === 'vitest' && !apart)) continue
+        const tests = plan.decisions.filter(t => t.project === pkg.name)
+        const chosen = tests.filter(wanted)
+        // ponytail: a vitest unit with no selected files is skipped; scripts are always selected.
+        if (pkg.kind === 'vitest' && !chosen.length) continue
+        const unit = {
+          package: pkg.name, dir: pkg.dir, kind: pkg.kind,
+          files: chosen.length === tests.length ? [] : chosen.map(t => resolve(root, t.file)),
+          idsByFile: new Map(tests.map(t => [t.file, t.id] as const)),
+        }
+        const { result, files: unitFiles } = await runSeparate(root, unit, resources.maxWorkers, outDir)
+        results.push(result)
+        files.push(...unitFiles)
+      }
+      report = analyzeRun(plan, mode, files, unhandled, performance.now() - runStart, runLevelFailure, results)
     } catch (error) {
       report = analyzeRun(plan, mode, [], [error instanceof Error ? error.stack ?? error.message : String(error)], performance.now() - runStart)
     }
     await writeJson(resolve(output, 'report.json'), report)
     await writeSummary(report, resolve(output, 'summary.md'))
     return { plan, report }
-  } finally { await adapter.close() }
+  } finally { await adapter?.close() }
 }
 
 /** Workspace packages with tests after --filter, or null for today's single-project run (no workspace, or --vitest-config). */
-async function workspacePackages(root: string, options: Options): Promise<WorkspacePackage[] | null> {
+async function workspacePackages(root: string, options: Options, isolated: string[]): Promise<WorkspacePackage[] | null> {
   const filters = options.filters ?? []
   if (options.vitestConfig) {
+    if (isolated.length) throw new Error(`isolated package not found: ${isolated[0]}`)
     if (filters.length) throw new Error('--filter cannot be used with --vitest-config')
     return null
   }
   const found = await discoverPackages(root)
   if (found.length === 1 && found[0]!.dir === '.') {
+    if (isolated.length) throw new Error(`isolated package not found: ${isolated[0]}`)
     if (filters.length) throw new Error('--filter needs a workspace (pnpm-workspace.yaml or package.json workspaces)')
     return null
   }
+  for (const name of isolated) if (!found.some(p => p.name === name)) throw new Error(`isolated package not found: ${name}`)
   const packages = filterPackages(found, filters)
   if (!packages.length) {
     throw new Error(filters.length ? 'No package with tests matches the filters'

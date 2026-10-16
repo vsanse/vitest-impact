@@ -52,6 +52,7 @@ async function main(): Promise<void> {
     const example: ImpactConfig = {
       version: 1,
       sourcePatterns: [],
+      isolated: [],
       inputs: [], forceFull: [], ignore: [], alwaysRun: [],
       resources: { workerMemoryMb: 512, reserveMemoryMb: 512 },
     }

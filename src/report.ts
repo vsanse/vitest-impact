@@ -1,9 +1,9 @@
 import { mkdir, rename, writeFile, appendFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { FileResult, Plan, RunReport } from './types.js'
+import type { FileResult, PackageResult, Plan, RunReport } from './types.js'
 
-export function analyzeRun(plan: Plan, mode: RunReport['mode'], executed: FileResult[], unhandledErrors: string[], executionMs: number, runLevelFailure = false): RunReport {
+export function analyzeRun(plan: Plan, mode: RunReport['mode'], executed: FileResult[], unhandledErrors: string[], executionMs: number, runLevelFailure = false, packages?: PackageResult[]): RunReport {
   const selected = new Set(plan.decisions.filter(t => t.selected).map(t => t.id))
   const expected = new Set(plan.decisions.filter(t => mode !== 'selected' || t.selected).map(t => t.id))
   const observed = new Set(executed.map(t => t.id))
@@ -11,17 +11,22 @@ export function analyzeRun(plan: Plan, mode: RunReport['mode'], executed: FileRe
   const unexpectedFiles = executed.filter(t => !expected.has(t.id)).map(t => t.file)
   const failed = executed.filter(t => t.state === 'failed' || t.failed > 0)
   const misses = mode === 'shadow' ? failed.filter(t => !selected.has(t.id)) : []
-  const incomplete = missingFiles.length > 0 || unexpectedFiles.length > 0 || unhandledErrors.length > 0 || executed.some(t => t.state === 'queued' || t.state === 'pending' || t.pending > 0)
+  // A planned separate or script unit with no result is incomplete; a unit that exited non-zero fails the run
+  // (coverage thresholds, unhandled errors and teardown errors show only in the exit code).
+  const results = new Set((packages ?? []).map(p => p.name))
+  const unitMissing = packages !== undefined && [...plan.scripts, ...plan.separate.map(s => s.package).filter(n => plan.decisions.some(t => t.project === n && expected.has(t.id)))].some(n => !results.has(n))
+  const unitFailed = (packages ?? []).some(p => p.mode !== 'shared' && p.exitCode !== 0)
+  const incomplete = unitMissing || missingFiles.length > 0 || unexpectedFiles.length > 0 || unhandledErrors.length > 0 || executed.some(t => t.state === 'queued' || t.state === 'pending' || t.pending > 0)
   const validation = mode !== 'shadow' ? 'not-shadow' : incomplete ? 'incomplete' : misses.length ? 'missed-failures' : failed.length ? 'all-observed-failures-selected' : 'no-failures-observed'
   const duration = executed.reduce((sum, t) => sum + t.durationMs, 0)
   return {
-    schemaVersion: 1, mode, plan, executed, unhandledErrors, executionMs, runLevelFailure,
+    schemaVersion: 1, mode, plan, executed, packages: packages ?? [], unhandledErrors, executionMs, runLevelFailure,
     missingFiles, unexpectedFiles, missedFailingFiles: misses.map(t => t.file), validation,
     observedFailureRecall: mode === 'shadow' && !incomplete && failed.length ? (failed.length - misses.length) / failed.length : null,
     // Summed file execution durations are not a wall-clock or billing estimate.
     estimatedSelectedDurationFraction: mode === 'shadow' && !incomplete && duration > 0
       ? executed.filter(t => selected.has(t.id)).reduce((sum, t) => sum + t.durationMs, 0) / duration : null,
-    exitCode: incomplete ? 2 : failed.length || runLevelFailure ? 1 : 0,
+    exitCode: incomplete ? 2 : failed.length || runLevelFailure || unitFailed ? 1 : 0,
   }
 }
 

@@ -40,7 +40,7 @@ test('a threads-pool package is planned for a separate process', async () => {
   expect(plan.plan.separate).toEqual([{ package: '@w/b', reason: 'pool:threads' }])
 })
 
-test('structural packages and script packages are planned outside the shared run, which refuses until it can run them', async () => {
+test('structural packages and script packages are planned outside the shared run', async () => {
   const { root } = await workspaceFixture({ packages: {
     'packages/b/vitest.config.ts': config('fileParallelism: false'),
     'packages/c/package.json': JSON.stringify({ name: '@w/c', type: 'module', scripts: { test: 'vitest run' } }),
@@ -61,9 +61,6 @@ test('structural packages and script packages are planned outside the shared run
   ])
   expect(plan.plan.scripts).toEqual(['@w/e'])
   expect(plan.plan.packages).toEqual(['@w/a', '@w/b', '@w/c', '@w/d', '@w/e'])
-  const run = await invoke(root, ['run', '--mode', 'full'])
-  expect(run.code).toBe(2)
-  expect(run.output).toContain('Separate execution is not implemented')
 })
 
 test('a package keeps its own lower worker limit without lowering the budget', async () => {
@@ -136,4 +133,72 @@ test('filters need a workspace, and must leave a package with tests', async () =
   const none = await invoke(scriptless.root, ['plan'])
   expect(none.code).toBe(2)
   expect(none.output).toContain('No workspace package has a Vitest test script. Use --vitest-config for a suite run from one root config.')
+})
+
+test('an isolated package runs in its own process and joins the report', async () => {
+  const { root } = await workspaceFixture({ config: { isolated: ['@w/b'] } })
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.plan.separate).toEqual([{ package: '@w/b', reason: 'isolated-in-config' }])
+  expect(run.report.packages.find(p => p.name === '@w/b')).toMatchObject({ mode: 'separate', exitCode: 0 })
+  expect(run.report.executed.filter(t => t.project === '@w/b')).toHaveLength(3)
+  expect(run.report.executed.filter(t => t.project === '@w/a')).toHaveLength(3)
+})
+
+test('an isolated name that is not a package exits 2', async () => {
+  const { root } = await workspaceFixture({ config: { isolated: ['@w/nope'] } })
+  const run = await invoke(root, ['plan'])
+  expect(run.code).toBe(2)
+  expect(run.output).toContain('isolated package not found: @w/nope')
+})
+
+test('a failing script package fails the run with exit 1', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/c/package.json': JSON.stringify({ name: '@w/c', scripts: { test: 'node fail.mjs' } }),
+    'packages/c/fail.mjs': 'process.exit(3)\n' } })
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code).toBe(1)
+  expect(run.report.packages.find(p => p.name === '@w/c')).toMatchObject({ mode: 'script', exitCode: 3 })
+})
+
+test('a separate package whose process exits non-zero fails the run even when every test passed', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/b/vitest.config.ts': config("pool: 'threads'"),
+    'packages/b/test/late.test.ts': "import { test } from 'vitest'; test('late error', async () => { setTimeout(() => { throw new Error('late') }, 0); await new Promise(r => setTimeout(r, 200)) })\n",
+  } })
+  const run = await invoke(root, ['run', '--mode', 'full'], 60_000)
+  expect(run.code, run.output).toBe(1)
+  const b = run.report.packages.find(p => p.name === '@w/b')
+  expect(b.mode).toBe('separate')
+  expect(b.exitCode).not.toBe(0)
+  expect(run.report.executed.filter(t => t.project === '@w/b').every(t => t.failed === 0)).toBe(true)
+})
+
+test('a workspace whose only package is a script package plans and runs it', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/a/package.json': JSON.stringify({ name: '@w/a' }), 'packages/b/package.json': JSON.stringify({ name: '@w/b' }),
+    'packages/c/package.json': JSON.stringify({ name: '@w/c', scripts: { test: 'node ok.mjs' } }),
+    'packages/c/ok.mjs': 'process.exit(0)\n' } })
+  const plan = await invoke(root, ['plan'])
+  expect(plan.code, plan.output).toBe(0)
+  expect(plan.plan.scripts).toEqual(['@w/c'])
+  const run = await invoke(root, ['run'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.report.packages).toMatchObject([{ name: '@w/c', mode: 'script', exitCode: 0 }])
+})
+
+test('selected mode skips a separate package with no selected files; a coverage package runs in full', async () => {
+  const { root, base } = await workspaceFixture({ packages: { 'packages/b/vitest.config.ts': config("pool: 'threads'") } })
+  await put(root, 'packages/a/src/index.ts', "export const name = 'a' as string\n")
+  const run = await invoke(root, ['run', '--mode', 'selected', '--base', base])
+  expect(run.code, run.output).toBe(0)
+  expect(run.report.executed.map(t => t.file)).toEqual(['packages/a/test/unit.test.ts'])
+  expect(run.report.packages.map(p => p.name)).toEqual(['@w/a'])
+  const cov = await workspaceFixture({ packages: { 'packages/b/vitest.config.ts': config('coverage: { enabled: true }') } })
+  await put(cov.root, 'packages/a/src/index.ts', "export const name = 'a' as string\n")
+  const plan = await invoke(cov.root, ['plan', '--base', cov.base])
+  const b = plan.plan.decisions.filter(t => t.project === '@w/b')
+  expect(b).toHaveLength(3)
+  expect(b.every(t => t.selected && t.reasons.includes('coverage: package runs in full'))).toBe(true)
+  expect(plan.plan.decisions.filter(t => t.project === '@w/a' && t.selected)).toHaveLength(1)
 })
