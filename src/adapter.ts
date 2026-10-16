@@ -23,6 +23,8 @@ function separateReason(project: TestProject, own: OwnTestConfig): string | null
   if ([config.globalSetup].flat().length) return 'global-setup'
   // Coverage is a root-only Vitest option: the shared process would drop the package's own.
   if (own.coverage?.enabled) return 'coverage'
+  // The root cache setting governs the shared run: a package that turned its module cache off keeps that in its own run.
+  if (own.fsModuleCache === false) return 'fs-module-cache-off'
   return null
 }
 
@@ -46,7 +48,7 @@ export class VitestAdapter {
     const cache = resolve(root, '.vitest-impact', 'cache')
     const overrides: ViteUserConfig = {
       cacheDir: resolve(cache, 'vite'),
-      test: { fsModuleCache: true, fsModuleCachePath: resolve(cache, 'modules'), ...(packages ? { projects: packages.map(p => resolve(root, p.vitestConfig!)) } : {}) },
+      test: { fsModuleCachePath: resolve(cache, 'modules'), ...(packages ? { projects: packages.map(p => resolve(root, p.vitestConfig!)) } : {}) },
     }
     const context = await createVitest({
       root,

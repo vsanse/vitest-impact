@@ -74,16 +74,18 @@ reason `global-setup` and runs in its own process.
 
 ## Caches
 
-- Shared runs set `test.fsModuleCache: true`, `test.fsModuleCachePath: .vitest-impact/cache/modules` and
-  Vite `cacheDir: .vitest-impact/cache/vite` as root overrides. Referenced projects fall back to the root
-  module-cache path.
+- Shared runs set `test.fsModuleCachePath: .vitest-impact/cache/modules` and Vite
+  `cacheDir: .vitest-impact/cache/vite` as root overrides. Vitest 5.0.5 defaults `fsModuleCache` to true
+  (`resolved.fsModuleCache ??= true`), so the tool never forces it on. Referenced projects fall back to the
+  root module-cache path.
+- A package whose own config sets `fsModuleCache: false` (the root option would govern the shared run) is
+  planned separate with reason `fs-module-cache-off`; its own run applies its own setting.
 - The results cache (`results.json`) and the dependency records are read from the ROOT config's `cacheDir`,
   so they always land under `.vitest-impact/cache/vite`, also in workspace mode. A package's own `cacheDir`
   only affects its Vite pre-bundle cache.
-- Separate `vitest` units: Vitest 5.0.5 has the CLI flags `--fsModuleCache` and `--fsModuleCachePath`; both
-  are passed, so a package config that sets `fsModuleCache: false` is overridden for the tool's runs.
-  Vitest 5.0.5 already defaults `fsModuleCache` to true (`resolved.fsModuleCache ??= true`); the flag only
-  matters when the package turns it off. They keep their own Vite `cacheDir` (no CLI flag for it).
-- In single-project mode the tool overrides the user's own `cacheDir`, `fsModuleCache` and `fsModuleCachePath`
-  for its runs (the first run after adoption starts cold; plain `vitest` runs keep their own location).
+- Separate `vitest` units: Vitest 5.0.5 has the CLI flag `--fsModuleCachePath`, so they get the same path.
+  They keep their own `fsModuleCache` value and their own Vite `cacheDir` (no CLI flag for it).
+- In single-project mode the tool overrides the user's own `cacheDir` and `fsModuleCachePath` for its runs;
+  the user's own `fsModuleCache` value stays (the first run after adoption starts cold; plain `vitest` runs
+  keep their own location).
 - The tool never deletes `.vitest-impact/cache`; only `plan.json`, `report.json` and `summary.md` are removed at start.

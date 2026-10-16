@@ -383,9 +383,11 @@ test('runs keep their module cache in .vitest-impact/cache across invocations', 
   expect((await invoke(root, ['run', '--mode', 'full'])).code).toBe(0)
 })
 
-test('a separate vitest unit writes the shared module cache', async () => {
-  const { root } = await workspaceFixture({ packages: { 'packages/b/vitest.config.ts': config("pool: 'threads', fsModuleCache: false") } })
-  const run = await invoke(root, ['run', '--mode', 'full', '--filter', '@w/b'])
+test('a package with fsModuleCache: false is planned separate and the shared cache still fills', async () => {
+  const { root } = await workspaceFixture({ packages: { 'packages/b/vitest.config.ts': config('fsModuleCache: false') } })
+  const plan = await invoke(root, ['plan'])
+  expect(plan.plan.separate).toEqual([{ package: '@w/b', reason: 'fs-module-cache-off' }])
+  const run = await invoke(root, ['run', '--mode', 'full'])
   expect(run.code, run.output).toBe(0)
   expect((await readdir(resolve(root, '.vitest-impact/cache/modules'))).filter(f => /^[0-9a-f]{40}$/.test(f)).length).toBeGreaterThan(0)
 })
