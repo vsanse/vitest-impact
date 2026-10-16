@@ -56,7 +56,6 @@ If the root has a `pnpm-workspace.yaml` (its `packages:` list) or a `package.jso
 - No root Vitest config is used in workspace mode. A root-level shared config is ignored. Settings Vitest reads only from the root (for example `reporters`) come from the tool.
 - A package that fails to parse, an empty filter result, or a Vitest package with no test files (unless its config sets `passWithNoTests: true`) is an error (exit 2). A package with `passWithNoTests: true` and no test files is left out and listed as `emptyPackages` in the plan.
 - `process.cwd()` in a package's tests is the package folder, as with `vitest run` inside that folder. It works in the shared process, which uses only the `forks` pool (a shim calls `process.chdir`), including `isolate: false`. Any other pool runs separately (see below). The shim was also shown to work with `vmForks`, but the tool separates that pool by policy. See [docs/decisions/cwd-parity.md](docs/decisions/cwd-parity.md).
-
 - Environment: like `vitest run`, the tool sets `TEST=true`, `VITEST=true` and `NODE_ENV=test` (unless `NODE_ENV` is already set) before it loads any config, so configs and tests see the values plain Vitest gives them. Separate and script units start from the environment the tool was started with, not from the tool's own process.
 - Package-manager variables: each Vitest package, shared or separate, gets `npm_package_name`, `npm_package_version` (when its `package.json` has them), `npm_lifecycle_event=test`, and the `node_modules/.bin` of its folder and of each folder above it up to the root first on `PATH`, as with `npm run test` in its folder. Script packages run through the package manager, which sets these itself.
 
@@ -170,7 +169,7 @@ The selection uses Git changes from `--base` to the working tree (committed, sta
 - `context.specifications` and `runTestSpecifications`, to run exact test files.
 - Changes to `project.config` after `createVitest`: `maxWorkers`, `env`, `setupFiles`, `allowOnly` and `sequence.groupOrder`.
 - Re-loading each package config through Vite's `loadConfigFromFile`, to read `coverage`, `fsModuleCache` and `passWithNoTests`, which Vitest overrides.
-- `config.providedOptions`, an untyped field used to see whether a package set its own `maxWorkers`. If it is missing, the lower value is kept.
+- `config.providedOptions`, an untyped field used to see whether a package (or the single project) set its own `maxWorkers`. If it is missing, the lower value is kept.
 - `process.exitCode`, read as the run-level failure signal.
 
 An unsupported major version is rejected before any run. These are the main compatibility risk and the reason for the exact tested version.
