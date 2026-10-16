@@ -23,6 +23,18 @@ describe('selection contract', () => {
     expect(result.decisions.filter(t => t.selected).map(t => t.id).sort()).toEqual(['fixture', 'math'])
     expect(result.mode).toBe('selective')
   })
+  test('a source change that selects nothing forces full, even when another change selects tests', async () => {
+    const related = async (paths: string[]) => (paths[0] === 'src/math.ts' ? ['math'] : [])
+    const result = await plan([{ path: 'src/math.ts', status: 'M' }, { path: 'src/orphan.ts', status: 'M' }], {}, related)
+    expect(result.mode).toBe('full')
+    expect(result.fallbackReasons).toContain('native-selection-empty-for-source: src/orphan.ts')
+  })
+  test('a changed test file that no other test imports does not force full', async () => {
+    const related = async (paths: string[]) => (paths[0] === 'src/math.ts' ? ['math'] : [])
+    const result = await plan([{ path: 'test/strings.test.ts', status: 'M' }, { path: 'src/math.ts', status: 'M' }], {}, related)
+    expect(result.mode).toBe('selective')
+    expect(result.decisions.filter(t => t.selected).map(t => t.id).sort()).toEqual(['math', 'strings'])
+  })
   test('new tests select themselves even when an ignore rule matches', async () => {
     const result = await plan([{ path: 'test/strings.test.ts', status: 'A' }], { ignore: ['**/*'] })
     expect(result.decisions.find(t => t.id === 'strings')?.selected).toBe(true)
