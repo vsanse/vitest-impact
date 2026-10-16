@@ -391,3 +391,23 @@ test('a package with fsModuleCache: false is planned separate and the shared cac
   expect(run.code, run.output).toBe(0)
   expect((await readdir(resolve(root, '.vitest-impact/cache/modules'))).filter(f => /^[0-9a-f]{40}$/.test(f)).length).toBeGreaterThan(0)
 })
+
+test('shared, separate and script units see the environment they get without the tool', async () => {
+  const nodeEnv = "import { test, expect } from 'vitest'; test('node env', () => expect(process.env.NODE_ENV).toBe('test'))\n"
+  const flagged = (x: string) => `import { defineConfig } from 'vitest/config'; export default defineConfig({ define: { __CONFIG_VITEST__: JSON.stringify(process.env.VITEST ?? 'unset') }, test: { include: ['test/**/*.test.ts'], ${x} } })\n`
+  const flag = "import { test, expect } from 'vitest'; declare const __CONFIG_VITEST__: string; test('config saw VITEST', () => expect(__CONFIG_VITEST__).toBe('true'))\n"
+  const { root } = await workspaceFixture({ packages: {
+    'packages/a/vitest.config.ts': flagged(''), 'packages/a/test/env.test.ts': nodeEnv, 'packages/a/test/flag.test.ts': flag,
+    'packages/b/vitest.config.ts': flagged("pool: 'threads'"), 'packages/b/test/env.test.ts': nodeEnv, 'packages/b/test/flag.test.ts': flag,
+    'packages/e/package.json': JSON.stringify({ name: '@w/e', scripts: { test: 'node check.mjs' } }),
+    // The package manager sets neither, so the script sees the shell's values (unset), not the tool's.
+    'packages/e/check.mjs': 'process.exit(process.env.NODE_ENV === undefined && process.env.VITEST === undefined ? 0 : 1)\n',
+  } })
+  const run = await invoke(root, ['run', '--mode', 'full'], 60_000)
+  expect(run.code, run.output).toBe(0)
+  expect(run.report.executed.filter(t => /\/(env|flag)\.test\.ts$/.test(t.file)).map(t => [t.file, t.state]).sort()).toEqual([
+    ['packages/a/test/env.test.ts', 'passed'], ['packages/a/test/flag.test.ts', 'passed'],
+    ['packages/b/test/env.test.ts', 'passed'], ['packages/b/test/flag.test.ts', 'passed'],
+  ])
+  expect(run.report.packages.find(p => p.name === '@w/e')).toMatchObject({ mode: 'script', exitCode: 0 })
+})

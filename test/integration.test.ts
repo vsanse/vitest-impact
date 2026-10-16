@@ -195,3 +195,11 @@ test('preserves native serial execution instead of enabling parallelism', async 
   expect(run.code, run.output).toBe(0)
   expect(run.plan.resources.maxWorkers).toBe(1)
 })
+
+test('a single-project run sets NODE_ENV to test, as plain vitest does', async () => {
+  const { root } = await fixture()
+  await put(root, 'test/env.test.ts', "import { test, expect } from 'vitest'; test('node env', () => expect(process.env.NODE_ENV).toBe('test'))\n")
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.report.executed.find(t => t.file === 'test/env.test.ts').state).toBe('passed')
+})

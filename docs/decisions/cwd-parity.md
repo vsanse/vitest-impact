@@ -61,6 +61,15 @@ reason `global-setup` and runs in its own process.
 - Vitest names a file project after its `package.json` name. The tool does not rely on that: it maps
   each project to the discovered package that holds its root.
 
+## Environment
+
+`vitest run` sets `TEST=true`, `VITEST=true` and `NODE_ENV ??= 'test'` (startVitest) before it loads a
+config. `createVitest` does not, and Vite then sets `NODE_ENV=development`, which every worker inherits.
+The adapter sets the three variables the same way before `createVitest`, so the package configs (both
+loads) and the shared workers see them. Separate and script units are spawned with a copy of the
+environment taken when the tool starts, so a separate `vitest run` sets them itself and a script package
+sees what its own runner gives it.
+
 ## Known gaps
 
 - A package config that reads `process.cwd()` while it loads (for example in `include`) sees the repo

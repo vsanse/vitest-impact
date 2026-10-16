@@ -57,6 +57,8 @@ If the root has a `pnpm-workspace.yaml` (its `packages:` list) or a `package.jso
 - A package that fails to parse, an empty filter result, or a Vitest package with no test files (unless its config sets `passWithNoTests: true`) is an error (exit 2). A package with `passWithNoTests: true` and no test files is left out and listed as `emptyPackages` in the plan.
 - `process.cwd()` in a package's tests is the package folder, as with `vitest run` inside that folder. It works in the shared process, which uses only the `forks` pool (a shim calls `process.chdir`), including `isolate: false`. Any other pool runs separately (see below). The shim was also shown to work with `vmForks`, but the tool separates that pool by policy. See [docs/decisions/cwd-parity.md](docs/decisions/cwd-parity.md).
 
+- Environment: like `vitest run`, the tool sets `TEST=true`, `VITEST=true` and `NODE_ENV=test` (unless `NODE_ENV` is already set) before it loads any config, so configs and tests see the values plain Vitest gives them. Separate and script units start from the environment the tool was started with, not from the tool's own process.
+
 **Known gaps of the working-folder guarantee:** the package config file is loaded with the repo root as the working folder, and Vite plugins run in the main process, so code in either that calls `process.cwd()` sees the repo root. A package with `globalSetup` runs separately, because global setup also sees the repo root.
 
 ### Packages that run in their own process

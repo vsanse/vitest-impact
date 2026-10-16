@@ -50,6 +50,10 @@ export class VitestAdapter {
       cacheDir: resolve(cache, 'vite'),
       test: { fsModuleCachePath: resolve(cache, 'modules'), ...(packages ? { projects: packages.map(p => resolve(root, p.vitestConfig!)) } : {}) },
     }
+    // As `vitest run` does before it loads a config. Without it Vite sets NODE_ENV=development for every worker.
+    process.env.TEST = 'true'
+    process.env.VITEST = 'true'
+    process.env.NODE_ENV ??= 'test'
     const context = await createVitest({
       root,
       // Workspace mode: no root Vitest config; each package's own config is one project.

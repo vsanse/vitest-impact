@@ -49,9 +49,12 @@ export interface SeparateUnit {
   idsByFile: Map<string, string>
 }
 
-function exec(command: string, args: string[], cwd: string): Promise<{ code: number | null; error?: string }> {
+/** The environment the tool started with. Units get this, not what Vitest and Vite set in this process. */
+export const startEnv: NodeJS.ProcessEnv = { ...process.env }
+
+function exec(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<{ code: number | null; error?: string }> {
   return new Promise(done => {
-    const child = spawn(command, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' && command !== process.execPath })
+    const child = spawn(command, args, { cwd, env, stdio: 'inherit', shell: process.platform === 'win32' && command !== process.execPath })
     child.on('error', error => done({ code: null, error: `could not start ${command}: ${(error as NodeJS.ErrnoException).code ?? error.message}` }))
     child.on('close', code => done({ code }))
   })
@@ -66,7 +69,7 @@ export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: 
   const errors: string[] = []
   const note = (run: { code: number | null; error?: string }) => { if (run.error) errors.push(`${unit.package}: ${run.error}`); return run.code }
   if (unit.kind === 'script') {
-    exitCode = note(await exec(packageManager(root), ['run', 'test'], cwd))
+    exitCode = note(await exec(packageManager(root), ['run', 'test'], cwd, startEnv))
   } else {
     const require = createRequire(resolve(cwd, 'package.json'))
     const pkgFile = require.resolve('vitest/package.json')
@@ -75,7 +78,7 @@ export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: 
     await mkdir(outDir, { recursive: true })
     const out = resolve(outDir, `${encodeURIComponent(unit.package)}.json`)
     await rm(out, { force: true })
-    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, `--fsModuleCachePath=${resolve(root, '.vitest-impact', 'cache', 'modules')}`, ...unit.files], cwd))
+    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, `--fsModuleCachePath=${resolve(root, '.vitest-impact', 'cache', 'modules')}`, ...unit.files], cwd, startEnv))
     // No usable report: the planned files become missingFiles, and the cause is recorded.
     let text: string | null = null
     try { text = await readFile(out, 'utf8') } catch { errors.push(`${unit.package}: no JSON report`) }

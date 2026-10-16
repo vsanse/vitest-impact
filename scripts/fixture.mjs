@@ -84,6 +84,8 @@ export async function invoke(root, args, timeout = 30_000) {
   let output = ''
   const env = { ...process.env, CI: 'true', NO_COLOR: '1' }
   delete env.GITHUB_STEP_SUMMARY
+  // Start the CLI as a shell would: without the variables Vitest set for this test run.
+  for (const key of Object.keys(env)) if (key === 'TEST' || key === 'NODE_ENV' || key.startsWith('VITEST')) delete env[key]
   try {
     const result = await exec(process.execPath, [cli, ...args], { cwd: root, env, timeout, maxBuffer: 2 * 1024 * 1024 })
     output = result.stdout + result.stderr
