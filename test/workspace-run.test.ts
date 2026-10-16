@@ -345,11 +345,20 @@ test('check: a failing structural package is reported and exits 1', async () => 
   expect(check.output).toContain('@w/b: runs alone (structural: pool:threads), failed -> real failure')
 })
 
-test('check: a test file that throws at import never exits 0 silently', async () => {
+test('check: a test file that throws at import is a real failure', async () => {
   const { root } = await workspaceFixture({ packages: { 'packages/b/test/boom.test.ts': "throw new Error('boom')\n" } })
   const check = await invoke(root, ['check'], 90_000)
-  expect(check.code, check.output).not.toBe(0)
-  expect(check.output).toMatch(/@w\/b|check:/)
+  expect(check.code, check.output).toBe(1)
+  expect(check.output).toContain('@w/b: shared failed, alone failed -> real failure')
+})
+
+test('check: a separate process that exits without a report is an incomplete run (exit 2)', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/b/vitest.config.ts': config("pool: 'threads', globalSetup: ['./global.ts']"),
+    'packages/b/global.ts': 'export default () => { process.exit(0) }\n' } })
+  const check = await invoke(root, ['check'], 90_000)
+  expect(check.code, check.output).toBe(2)
+  expect(check.output).toContain('check: the run was incomplete')
 })
 
 test('check --write merges into an existing isolated list, sorted', async () => {
