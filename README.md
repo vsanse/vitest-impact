@@ -81,6 +81,11 @@ A Vitest package runs in its own Vitest process, with its own settings, when the
 
 A separate package keeps its own result: if its process exits non-zero, the run exits 1, even if every test passed (coverage thresholds, unhandled errors). Separate units run one after another. Like the shared run, they never allow `.only` (`--allowOnly=false`), in CI or not.
 
+Limits of separate units:
+
+- A unit that runs only part of its files passes them to Vitest as file filters, which match by substring: a selected `a.test.ts` also runs `a.test.tsx`. The plan check reports the extra file as unexpected (exit 2).
+- A test file that two inline projects of one separate package both include always makes the run incomplete (exit 2): the unit's JSON report has one entry per file path, so one of the two planned entries is missing.
+
 ## The `isolated` list and `check`
 
 Some packages pass alone but fail when sharing a process (shared module state, ports, global mocks). Put them in `isolated`:
@@ -155,6 +160,7 @@ The selection uses Git changes from `--base` to the working tree (committed, sta
 - Shadow mode runs everything, so it cannot hide a failure; it only tells you whether the selection would have.
 - There is **no universal completeness guarantee** for unrestricted JavaScript. It does not follow dynamic imports, filesystem reads, `.env` edits, external services, or generated files outside Git. Links between workspace packages (through `dist`, the optimizer or a workspace link) are not tracked yet, so a source change in a package that another package in the run depends on runs the full set. Old import graphs are not rebuilt, so deletions run the full set. No dependency records are kept between runs yet. Keep your full-suite gates and use shadow mode first.
 - A base is only checked to be an ancestor. Git does not prove the base passed its tests.
+- A shallow clone (for example `actions/checkout` with its default `fetch-depth: 1`) cannot resolve `--base`, so the full set runs (`git-unavailable-or-invalid-base`). Check out with `fetch-depth: 0`.
 - A root Vitest config with several projects (`test.projects`) is not supported yet (exit 2). Workspace mode uses each package's own config instead.
 - Concurrent edits during a run are not supported.
 
