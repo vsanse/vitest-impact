@@ -252,3 +252,29 @@ test('a separate process that exits before writing its report leaves no stale re
   expect(second.report.missingFiles.sort()).toEqual(['packages/b/test/cwd.test.ts', 'packages/b/test/same.test.ts', 'packages/b/test/unit.test.ts'])
   expect(second.report.unhandledErrors).toContain('@w/b: no JSON report')
 })
+
+test('a shard with no files exits 0 and says so', async () => {
+  const { root } = await workspaceFixture()
+  const run = await invoke(root, ['run', '--mode', 'full', '--filter', '@w/a', '--shard', '4/4'])
+  // @w/a has 3 files: size 1, shard 4 is empty
+  expect(run.code, run.output).toBe(0)
+  expect(run.output).toContain('Shard 4/4 has no test files.')
+})
+
+test('shards together run every file once with a clean report', async () => {
+  const { root } = await workspaceFixture()
+  const seen: string[] = []
+  for (const i of [1, 2]) {
+    const run = await invoke(root, ['run', '--mode', 'full', '--shard', `${i}/2`])
+    expect(run.code, run.output).toBe(0)
+    const report = JSON.parse(await readFile(resolve(root, '.vitest-impact/report.json'), 'utf8'))
+    expect(report.plan.shard).toEqual({ index: i, count: 2 })
+    expect(report.missingFiles).toEqual([])
+    expect(report.unexpectedFiles).toEqual([])
+    seen.push(...report.executed.map((f: { file: string }) => f.file))
+  }
+  const plan = await invoke(root, ['plan'])
+  expect(plan.code, plan.output).toBe(0)
+  const all = JSON.parse(await readFile(resolve(root, '.vitest-impact/plan.json'), 'utf8')).decisions.map((d: { file: string }) => d.file)
+  expect(seen.sort()).toEqual(all.sort())
+})

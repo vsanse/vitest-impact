@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util'
 import { resolve } from 'node:path'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import { execute } from './index.js'
+import { parseShard } from './shard.js'
 import { DEFAULT_CONFIG } from './config.js'
 import type { ImpactConfig, RunReport } from './types.js'
 
@@ -20,6 +21,7 @@ Options:
   --filter PKG                Package name or ./folder-glob; ! excludes; repeatable
   --base REF                  Explicit ancestor revision; absent/invalid means full suite
   --mode MODE                 shadow (default), selected, or full
+  --shard i/n                 Run only the i-th of n shares of the planned files
   --max-workers N             Worker ceiling, capped by CPU/memory estimate
   --memory-mb N               Available memory budget in MB
   --worker-memory-mb N        Estimated incremental memory per worker
@@ -37,7 +39,7 @@ async function main(): Promise<void> {
     options: {
       root: { type: 'string' }, config: { type: 'string' }, 'vitest-config': { type: 'string' },
       filter: { type: 'string', multiple: true },
-      base: { type: 'string' }, mode: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+      base: { type: 'string' }, shard: { type: 'string' }, mode: { type: 'string' }, help: { type: 'boolean', short: 'h' },
       'max-workers': { type: 'string' }, 'memory-mb': { type: 'string' },
       'worker-memory-mb': { type: 'string' }, 'reserve-memory-mb': { type: 'string' },
     },
@@ -47,6 +49,7 @@ async function main(): Promise<void> {
   if (positionals.length !== 1 || !['init', 'plan', 'run'].includes(command ?? '')) throw new Error(HELP)
   if (values.mode && !['shadow', 'selected', 'full'].includes(values.mode)) throw new Error('--mode must be shadow, selected, or full')
   if (command !== 'run' && values.mode) throw new Error('--mode is only supported with run')
+  if (values.shard !== undefined) parseShard(values.shard)
   const root = resolve(values.root ?? process.cwd())
   if (command === 'init') {
     const example: ImpactConfig = {
@@ -79,6 +82,7 @@ async function main(): Promise<void> {
     ...(values.config ? { config: values.config } : {}),
     ...(values['vitest-config'] ? { vitestConfig: values['vitest-config'] } : {}),
     ...(values.filter ? { filters: values.filter } : {}),
+    ...(values.shard !== undefined ? { shard: values.shard } : {}),
     ...(values.mode ? { mode: values.mode as RunReport['mode'] } : {}),
   })
   console.log(`\nImpact plan: ${plan.decisions.filter(t => t.selected).length}/${plan.decisions.length} files; ${plan.mode}; ${plan.resources.maxWorkers} workers.`)

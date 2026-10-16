@@ -60,6 +60,8 @@ export interface Plan {
   scripts: string[]
   /** Vitest packages with no test files whose config sets passWithNoTests; left out of the run. */
   emptyPackages: string[]
+  /** The `--shard i/n` this invocation runs, or null. */
+  shard: { index: number; count: number } | null
   resources: ResourceBudget
   planningMs: number
   warnings: string[]

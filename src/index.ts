@@ -9,6 +9,7 @@ import { budgetResources } from './resources.js'
 import { analyzeRun, writeJson, writeSummary } from './report.js'
 import { withRunLock } from './lock.js'
 import { discoverPackages, filterPackages } from './workspace.js'
+import { parseShard, shardFiles, shardOfName } from './shard.js'
 import { runSeparate } from './separate.js'
 import type { FileResult, ImpactConfig, PackageResult, Plan, RunReport, WorkspacePackage } from './types.js'
 
@@ -26,6 +27,8 @@ export interface Options {
   command: 'plan' | 'run'
   mode?: RunReport['mode']
   resources?: ImpactConfig['resources']
+  /** `i/n`: run only this share of the planned files. */
+  shard?: string
 }
 
 export async function execute(options: Options): Promise<{ plan: Plan; report?: RunReport }> {
@@ -35,6 +38,7 @@ export async function execute(options: Options): Promise<{ plan: Plan; report?: 
 
 async function executeLocked(options: Options): Promise<{ plan: Plan; report?: RunReport }> {
   const start = performance.now()
+  const shard = options.shard === undefined ? null : parseShard(options.shard)
   const root = resolve(options.root ?? process.cwd())
   const output = resolve(root, '.vitest-impact')
   // Never leave a prior successful result looking like the result of a failed invocation.
@@ -77,7 +81,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
       nodeVersion: process.version, root, createdAt: new Date().toISOString(), git,
       configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection,
       packages: packages?.map(p => p.name) ?? [], separate,
-      scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], emptyPackages: adapter?.emptyPackages ?? [], resources,
+      scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], emptyPackages: adapter?.emptyPackages ?? [], shard, resources,
       planningMs: performance.now() - start,
       warnings: [
         'Selection assumes sourcePatterns use statically resolvable dependencies; declare other inputs or force a full run.',
@@ -96,8 +100,14 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     await writeJson(resolve(output, 'plan.json'), plan)
     if (options.command === 'plan') return { plan }
     const mode = options.mode ?? 'shadow'
-    const wanted = (t: { selected: boolean }) => mode !== 'selected' || t.selected
+    const inShard = new Set((shard ? shardFiles(plan.decisions, shard.index, shard.count) : plan.decisions).map(t => t.id))
+    const wanted = (t: { id: string; selected: boolean }) => inShard.has(t.id) && (mode !== 'selected' || t.selected)
+    const scriptHere = (name: string) => !shard || shardOfName(name, shard.count) === shard.index
     const ids = new Set(plan.decisions.filter(wanted).map(t => t.id))
+    if (shard && !inShard.size && !plan.scripts.some(scriptHere)) {
+      console.log(`Shard ${shard.index}/${shard.count} has no test files.`)
+      return { plan }
+    }
     const runStart = performance.now()
     let report: RunReport
     try {
@@ -121,6 +131,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
       for (const pkg of packages ?? []) {
         const apart = plan.separate.some(s => s.package === pkg.name)
         if (pkg.kind === 'none' || (pkg.kind === 'vitest' && !apart)) continue
+        if (pkg.kind === 'script' && !scriptHere(pkg.name)) continue
         const tests = plan.decisions.filter(t => t.project === pkg.name)
         const chosen = tests.filter(wanted)
         // ponytail: a vitest unit with no selected files is skipped; scripts are always selected.
