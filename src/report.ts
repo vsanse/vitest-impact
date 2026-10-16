@@ -1,23 +1,22 @@
 import { mkdir, rename, writeFile, appendFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { shardFiles, shardOfName } from './shard.js'
+import { scriptInShard, shardRunSet } from './shard.js'
 import type { FileResult, PackageResult, Plan, RunReport } from './types.js'
 
 export function analyzeRun(plan: Plan, mode: RunReport['mode'], executed: FileResult[], unhandledErrors: string[], executionMs: number, runLevelFailure = false, packages?: PackageResult[]): RunReport {
   const selected = new Set(plan.decisions.filter(t => t.selected).map(t => t.id))
   const { shard } = plan
-  const inShard = new Set((shard ? shardFiles(plan.decisions, shard.index, shard.count) : plan.decisions).map(t => t.id))
-  const expected = new Set(plan.decisions.filter(t => inShard.has(t.id) && (mode !== 'selected' || t.selected)).map(t => t.id))
+  const expected = new Set(shardRunSet(plan.decisions, mode, shard).map(t => t.id))
   const observed = new Set(executed.map(t => t.id))
   const missingFiles = plan.decisions.filter(t => expected.has(t.id) && !observed.has(t.id)).map(t => t.file)
   const unexpectedFiles = executed.filter(t => !expected.has(t.id)).map(t => t.file)
   const failed = executed.filter(t => t.state === 'failed' || t.failed > 0)
-  const misses = mode === 'shadow' ? failed.filter(t => inShard.has(t.id) && !selected.has(t.id)) : []
+  const misses = mode === 'shadow' ? failed.filter(t => !selected.has(t.id)) : []
   // A planned separate or script unit with no result is incomplete; a unit that exited non-zero fails the run
   // (coverage thresholds, unhandled errors and teardown errors show only in the exit code).
   const results = new Set((packages ?? []).map(p => p.name))
-  const unitMissing = packages !== undefined && [...plan.scripts.filter(n => !shard || shardOfName(n, shard.count) === shard.index), ...plan.separate.map(s => s.package).filter(n => plan.decisions.some(t => t.project === n && expected.has(t.id)))].some(n => !results.has(n))
+  const unitMissing = packages !== undefined && [...plan.scripts.filter(n => scriptInShard(n, shard)), ...plan.separate.map(s => s.package).filter(n => plan.decisions.some(t => t.project === n && expected.has(t.id)))].some(n => !results.has(n))
   const unitFailed = (packages ?? []).some(p => p.mode !== 'shared' && p.exitCode !== 0)
   const incomplete = unitMissing || missingFiles.length > 0 || unexpectedFiles.length > 0 || unhandledErrors.length > 0 || executed.some(t => t.state === 'queued' || t.state === 'pending' || t.pending > 0)
   const unreliable = incomplete || unitFailed

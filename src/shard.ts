@@ -21,3 +21,16 @@ export function shardFiles<T extends { file: string }>(items: T[], index: number
 export function shardOfName(name: string, count: number): number {
   return Number.parseInt(sha(name).slice(0, 8), 16) % count + 1
 }
+
+type Shard = { index: number; count: number } | null | undefined
+
+/** The files this invocation runs: the mode's run set (all, or only the selected), then this shard's slice of it. */
+export function shardRunSet<T extends { file: string; selected: boolean }>(decisions: T[], mode: 'shadow' | 'selected' | 'full', shard: Shard): T[] {
+  const set = decisions.filter(t => mode !== 'selected' || t.selected)
+  return shard ? shardFiles(set, shard.index, shard.count) : set
+}
+
+/** A script unit runs in exactly one shard. */
+export function scriptInShard(name: string, shard: Shard): boolean {
+  return !shard || shardOfName(name, shard.count) === shard.index
+}

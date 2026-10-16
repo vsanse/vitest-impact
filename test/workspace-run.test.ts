@@ -259,6 +259,42 @@ test('a shard with no files exits 0 and says so', async () => {
   // @w/a has 3 files: size 1, shard 4 is empty
   expect(run.code, run.output).toBe(0)
   expect(run.output).toContain('Shard 4/4 has no test files.')
+  const report = JSON.parse(await readFile(resolve(root, '.vitest-impact/report.json'), 'utf8'))
+  expect(report).toMatchObject({ exitCode: 0, missingFiles: [], unexpectedFiles: [], executed: [] })
+  await readFile(resolve(root, '.vitest-impact/summary.md'), 'utf8')
+})
+
+test('selected mode shards the selected files, not all files', async () => {
+  const { root, base } = await workspaceFixture()
+  await put(root, 'packages/a/src/index.ts', "export const name = 'a' as string\n")
+  await put(root, 'packages/b/src/index.ts', "export const name = 'b' as string\n")
+  const seen: string[] = []
+  const sizes: number[] = []
+  for (const i of [1, 2, 3]) {
+    const run = await invoke(root, ['run', '--mode', 'selected', '--base', base, '--shard', `${i}/3`])
+    expect(run.code, run.output).toBe(0)
+    sizes.push(run.report.executed.length)
+    expect(run.report.missingFiles).toEqual([])
+    expect(run.report.unexpectedFiles).toEqual([])
+    seen.push(...run.report.executed.map(t => t.file))
+  }
+  expect(sizes).toEqual([1, 1, 0]) // ceil(2 selected / 3) = 1 per shard
+  expect(seen.sort()).toEqual(['packages/a/test/unit.test.ts', 'packages/b/test/unit.test.ts'])
+})
+
+test('a script package runs in exactly one shard and is not missing in the other', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/e/package.json': JSON.stringify({ name: '@w/e', scripts: { test: 'node check.mjs' } }),
+    'packages/e/check.mjs': 'process.exit(0)\n',
+  } })
+  const ran: boolean[] = []
+  for (const i of [1, 2]) {
+    const run = await invoke(root, ['run', '--mode', 'full', '--shard', `${i}/2`])
+    expect(run.code, run.output).toBe(0)
+    expect(run.report.missingFiles).toEqual([])
+    ran.push(run.report.packages.some(p => p.name === '@w/e'))
+  }
+  expect(ran.filter(Boolean)).toHaveLength(1)
 })
 
 test('shards together run every file once with a clean report', async () => {
