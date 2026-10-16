@@ -379,5 +379,13 @@ test('runs keep their module cache in .vitest-impact/cache across invocations', 
   const { root } = await workspaceFixture()
   expect((await invoke(root, ['run', '--mode', 'full'])).code).toBe(0)
   expect((await readdir(resolve(root, '.vitest-impact/cache/modules'))).length).toBeGreaterThan(0)
+  expect((await readdir(resolve(root, '.vitest-impact/cache/vite'), { recursive: true })).some(f => f.endsWith('results.json'))).toBe(true)
   expect((await invoke(root, ['run', '--mode', 'full'])).code).toBe(0)
+})
+
+test('a separate vitest unit writes the shared module cache', async () => {
+  const { root } = await workspaceFixture({ packages: { 'packages/b/vitest.config.ts': config("pool: 'threads', fsModuleCache: false") } })
+  const run = await invoke(root, ['run', '--mode', 'full', '--filter', '@w/b'])
+  expect(run.code, run.output).toBe(0)
+  expect((await readdir(resolve(root, '.vitest-impact/cache/modules'))).filter(f => /^[0-9a-f]{40}$/.test(f)).length).toBeGreaterThan(0)
 })
