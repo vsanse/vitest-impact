@@ -506,3 +506,11 @@ test('test.only fails in a separate unit as in the shared run, also outside CI',
   expect(run.code, run.output).toBe(1)
   expect(run.report.executed.filter(t => t.file.endsWith('/only.test.ts')).map(t => [t.project, t.state]).sort()).toEqual([['@w/a', 'failed'], ['@w/b', 'failed']])
 })
+
+test('check says when a package on the isolated list passes in the shared process', async () => {
+  const { root } = await workspaceFixture({ config: { isolated: ['@w/b'] } })
+  const check = await invoke(root, ['check'], 90_000)
+  expect(check.code, check.output).toBe(0)
+  expect(check.output).toContain('@w/b: on the isolated list, passes shared -> can be removed')
+  expect(check.output).not.toContain('@w/a: on the isolated list')
+})

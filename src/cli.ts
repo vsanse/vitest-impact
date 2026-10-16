@@ -81,6 +81,8 @@ async function main(): Promise<void> {
       if (r.structural) { console.log(`${r.package}: runs alone (structural: ${r.structural}), failed -> real failure`); continue }
       console.log(`${r.package}: shared failed, alone ${r.alone} -> ${r.alone === 'passed' ? 'isolated candidate' : 'real failure'}`)
     }
+    const listed = (await loadConfig(root, values.config)).config.isolated
+    for (const r of results) if (r.shared === 'passed' && listed.includes(r.package)) console.log(`${r.package}: on the isolated list, passes shared -> can be removed`)
     const candidates = results.filter(r => r.alone === 'passed').map(r => r.package)
     if (values.write && candidates.length) {
       const path = (await loadConfig(root, values.config)).path
