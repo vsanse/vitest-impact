@@ -70,13 +70,18 @@ describe('workspace', () => {
     expect(filterPackages(pkgs, ['!@x/zzz']).map(p => p.name)).toEqual(['@x/a', '@x/b', '@x/d', '@x/e'])
   })
 
-  test('unindented pnpm list, and a pnpm file with no packages list', async () => {
+  test('unindented pnpm list, a pnpm file with no packages key, and a packages key with no items', async () => {
     const root = await make()
     await put(root, 'pnpm-workspace.yaml', "packages:\n- 'packages/*'\n- \"apps/*\"\nother:\n- x\n")
     await pkg(root, 'packages/a', { name: 'a', scripts: { test: 'vitest' } }, 'vitest.config.ts')
     await pkg(root, 'apps/b', { name: 'b', scripts: { test: 'vitest' } }, 'vitest.config.ts')
     expect((await discoverPackages(root)).map(p => p.dir)).toEqual(['apps/b', 'packages/a'])
-    for (const text of ['onlyBuiltDependencies:\n  - esbuild\n', "packages: ['packages/*']\n"]) {
+    // A single-package pnpm repo keeps settings in the file and has no packages key: not a workspace.
+    const single = await make()
+    await put(single, 'pnpm-workspace.yaml', 'onlyBuiltDependencies:\n  - esbuild\n')
+    await pkg(single, '.', { name: 'solo', scripts: { test: 'vitest run' } }, 'vitest.config.ts')
+    expect((await discoverPackages(single)).map(p => [p.name, p.dir])).toEqual([['solo', '.']])
+    for (const text of ["packages: ['packages/*']\n", 'packages:\nother: 1\n']) {
       const bad = await make()
       await put(bad, 'pnpm-workspace.yaml', text)
       await expect(discoverPackages(bad)).rejects.toThrow('pnpm-workspace.yaml has no packages list')

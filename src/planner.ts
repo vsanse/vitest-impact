@@ -9,7 +9,7 @@ const PROTECTED = [
   '**/vitest.config.*', '**/vite.config.*',
   '**/vitest.workspace.*', '**/vitest.projects.*', '**/tsconfig*.json',
   '**/.env', '**/.env.*', '**/.npmrc', '**/.nvmrc', '**/.node-version',
-  '**/vitest-impact.config.json', '.github/**',
+  '**/vitest-impact.config.json', '**/pnpm-workspace.yaml', '**/.yarnrc.yml', '.github/**',
 ]
 
 export interface Selection {

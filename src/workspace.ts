@@ -18,14 +18,15 @@ const readJson = async (path: string, shown: string): Promise<Record<string, unk
 }
 
 // ponytail: line parser for the packages: list only; use a YAML parser if real files break it.
-function pnpmPackages(text: string): string[] {
-  const globs: string[] = []
+/** The packages: globs, or null when the file has no packages: key (a single-package repo keeping settings there). */
+function pnpmPackages(text: string): string[] | null {
+  let globs: string[] | null = null
   let inside = false
   for (const line of text.split(/\r?\n/)) {
-    if (/^[^\s#-]/.test(line)) { inside = /^packages\s*:/.test(line); continue }
+    if (/^[^\s#-]/.test(line)) { inside = /^packages\s*:/.test(line); if (inside) globs ??= []; continue }
     if (!inside) continue
     const item = /^\s*-\s+(?:'([^']*)'|"([^"]*)"|([^#\s][^#]*?))\s*(?:#.*)?$/.exec(line)
-    if (item) globs.push(item[1] ?? item[2] ?? item[3]!)
+    if (item) globs!.push(item[1] ?? item[2] ?? item[3]!)
   }
   return globs
 }
@@ -36,8 +37,9 @@ async function workspaceGlobs(root: string): Promise<string[] | null> {
     if (!isMissing(error)) throw error
   }
   if (yaml !== null) {
+    // pnpm ignores package.json workspaces, so a file with no packages: key means no workspace.
     const globs = pnpmPackages(yaml)
-    if (!globs.length) throw new Error('pnpm-workspace.yaml has no packages list')
+    if (globs?.length === 0) throw new Error('pnpm-workspace.yaml has no packages list')
     return globs
   }
   const workspaces = (await readJson(resolve(root, 'package.json'), 'package.json'))?.workspaces

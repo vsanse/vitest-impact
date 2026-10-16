@@ -45,7 +45,7 @@ describe('selection contract', () => {
   test('unknown inputs broaden execution', async () => {
     expect((await plan([{ path: 'schema.graphql', status: 'M' }])).fallbackReasons[0]).toContain('unclassified-input')
   })
-  test.each(['package.json', 'pnpm-lock.yaml', '.env.test', '.github/workflows/test.yml', 'vitest.config.ts'])('protects %s from ignore rules', async path => {
+  test.each(['package.json', 'pnpm-lock.yaml', '.env.test', '.github/workflows/test.yml', 'vitest.config.ts', 'pnpm-workspace.yaml', '.yarnrc.yml', 'packages/a/.yarnrc.yml'])('protects %s from ignore rules', async path => {
     expect((await plan([{ path, status: 'M' }], { ignore: ['**/*'] })).mode).toBe('full')
   })
   test('an unmatched fixture owner falls back to full', async () => {
