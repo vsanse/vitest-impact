@@ -51,7 +51,7 @@ async function main(): Promise<void> {
       version: 1,
       sourcePatterns: [],
       inputs: [], forceFull: [], ignore: [], alwaysRun: [],
-      resources: { maxWorkers: 2, workerMemoryMb: 512, reserveMemoryMb: 512 },
+      resources: { workerMemoryMb: 512, reserveMemoryMb: 512 },
     }
     await writeFile(resolve(root, DEFAULT_CONFIG), `${JSON.stringify(example, null, 2)}\n`, { flag: 'wx' })
     let ignore = ''

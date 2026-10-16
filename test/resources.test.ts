@@ -12,6 +12,11 @@ test('CPU limit and available memory cap explicit requests', () => {
   expect(budgetResources({ maxWorkers: 8 }, { cpu: 2, availableMemoryMb: 8192 }).maxWorkers).toBe(2)
   expect(budgetResources({ maxWorkers: 8, memoryBudgetMb: 8192 }, { cpu: 8, availableMemoryMb: 1024 }).maxWorkers).toBe(1)
 })
+test('the default worker count is every available CPU, capped by memory', () => {
+  expect(budgetResources({}, { cpu: 8, availableMemoryMb: 16384 }).maxWorkers).toBe(8)
+  expect(budgetResources({}, { cpu: 2, availableMemoryMb: 8192 }).maxWorkers).toBe(2)
+  expect(budgetResources({}, { cpu: 8, availableMemoryMb: 2048 }).maxWorkers).toBe(3)
+})
 test('refuses to pretend that a worker fits without memory', () => {
   expect(() => budgetResources({}, { cpu: 2, availableMemoryMb: 256 })).toThrow('Insufficient estimated memory')
 })

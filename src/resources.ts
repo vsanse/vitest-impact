@@ -52,7 +52,7 @@ export function budgetResources(options: ImpactConfig['resources'], host = detec
   const reserveMemoryMb = options.reserveMemoryMb ?? 512
   const memoryWorkers = Math.floor((memoryBudgetMb - reserveMemoryMb) / workerMemoryMb)
   if (memoryWorkers < 1) throw new Error(`Insufficient estimated memory: ${memoryBudgetMb} MB available, ${reserveMemoryMb} MB reserve, ${workerMemoryMb} MB per worker. Adjust the estimate or use a larger runner.`)
-  const requested = options.maxWorkers ?? Math.min(2, host.cpu)
+  const requested = options.maxWorkers ?? host.cpu
   const maxWorkers = Math.max(1, Math.min(requested, host.cpu, memoryWorkers))
   const warnings = ['Memory estimates choose concurrency; they are not enforced heap limits or an OOM guarantee.']
   if (!options.workerMemoryMb) warnings.push('Using an unmeasured 512 MB per-worker assumption. Calibrate this on your suite.')
