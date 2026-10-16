@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'vitest'
 import { rm } from 'node:fs/promises'
+import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 import { makeFixture, put, invoke, git } from '../scripts/fixture.mjs'
 
@@ -202,4 +203,14 @@ test('a single-project run sets NODE_ENV to test, as plain vitest does', async (
   const run = await invoke(root, ['run', '--mode', 'full'])
   expect(run.code, run.output).toBe(0)
   expect(run.report.executed.find(t => t.file === 'test/env.test.ts').state).toBe('passed')
+})
+
+test("a single project that sets no maxWorkers gets the budget, not Vitest's default", async () => {
+  const { root } = await fixture()
+  await put(root, 'vitest.config.ts', "import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { include: ['test/**/*.test.ts'] } })\n")
+  // Vitest's default is the CPU count minus one, which the old code kept as if the project had set it.
+  const run = await invoke(root, ['plan', '--max-workers', String(availableParallelism())])
+  expect(run.code, run.output).toBe(0)
+  expect(run.plan.resources.maxWorkers).toBe(run.plan.resources.availableCpu)
+  expect(run.plan.resources.warnings.join(' ')).not.toContain('Preserved')
 })

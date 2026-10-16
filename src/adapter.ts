@@ -87,7 +87,9 @@ export class VitestAdapter {
           throw new Error('MVP supports Node forks/threads pools only (including jsdom/happy-dom). Browser, VM/custom pools, and typecheck suites are not yet supported.')
         }
         // Cap native concurrency; never override a user's stricter serial/worker setting.
-        const configuredLimit = Math.min(cfg.maxWorkers, project.config.maxWorkers)
+        // Vitest's default (CPU count minus one) is not a user setting: as in workspace mode, it is replaced.
+        const userSet = (c: { maxWorkers: number } & Untyped) => c.providedOptions?.maxWorkers !== false || c.fileParallelism === false
+        const configuredLimit = Math.min(...[cfg, project.config].filter(userSet).map(c => c.maxWorkers), Infinity)
         if (configuredLimit < budget.maxWorkers) {
           budget.warnings.push(`Preserved Vitest's stricter ${configuredLimit}-worker limit.`)
           budget.maxWorkers = configuredLimit
