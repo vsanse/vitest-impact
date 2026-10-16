@@ -70,12 +70,23 @@ loads) and the shared workers see them. Separate and script units are spawned wi
 environment taken when the tool starts, so a separate `vitest run` sets them itself and a script package
 sees what its own runner gives it.
 
+`npm run test` in a package also sets `npm_package_name`, `npm_package_version`, `npm_lifecycle_event=test`
+and puts the `node_modules/.bin` of the package folder and of each folder above it first on `PATH`. Each
+shared project gets these through `project.config.env` (the package's own `env` wins, as in its own run),
+and each separate `vitest` unit through its spawn environment. Script units run through the package
+manager, which sets them itself.
+
 ## Known gaps
 
 - A package config that reads `process.cwd()` while it loads (for example in `include`) sees the repo
   root, not the package folder. The spike did not cover this.
 - Vite plugins run in the main process. A plugin that calls `process.cwd()` while it transforms a file
   sees the repo root, not the package folder.
+- Package-manager variables other than the four above (`npm_package_json`, `npm_lifecycle_script`, other
+  `npm_package_*` fields, `npm_config_*`, `INIT_CWD`, and pnpm's or yarn's own) keep the values the tool
+  was started with. npm walks `PATH` up to the filesystem root and adds `node-gyp-bin`; the tool stops at
+  the repo root and adds nothing else. Package configs and Vite plugins run in the main process, with
+  the tool's environment. In single-project mode the tests see the environment the tool was started with.
 - With the root `config: false`, settings that Vitest takes only from the root config (for example
   `reporters`, `teardownTimeout`, `onConsoleLog`) come from the tool, not from a package config.
   `coverage` is handled (reason `coverage`), but only as the config file sets it: a Vite plugin that

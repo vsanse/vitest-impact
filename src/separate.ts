@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { dirname, resolve } from 'node:path'
+import { delimiter, dirname, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { localPath } from './git.js'
 import type { FileResult, PackageResult } from './types.js'
@@ -55,6 +55,25 @@ export interface SeparateUnit {
 /** The environment the tool started with. Units get this, not what Vitest and Vite set in this process. */
 export const startEnv: NodeJS.ProcessEnv = { ...process.env }
 
+/**
+ * What `npm run test` in the package adds to the environment: the package name and version, the lifecycle
+ * event, and node_modules/.bin of the package folder and of each folder above it up to the root, first on PATH.
+ */
+export function packageEnv(root: string, dir: string): Record<string, string> {
+  const json = JSON.parse(readFileSync(resolve(root, dir, 'package.json'), 'utf8')) as { name?: unknown; version?: unknown }
+  const env: Record<string, string> = { npm_lifecycle_event: 'test' }
+  if (typeof json.name === 'string') env.npm_package_name = json.name
+  if (typeof json.version === 'string') env.npm_package_version = json.version
+  const bins: string[] = []
+  for (let folder = resolve(root, dir); ; folder = dirname(folder)) {
+    bins.push(resolve(folder, 'node_modules', '.bin'))
+    if (folder === resolve(root) || folder === dirname(folder)) break
+  }
+  const key = Object.keys(startEnv).find(k => k.toUpperCase() === 'PATH') ?? 'PATH'
+  env[key] = [...bins, ...(startEnv[key] ? [startEnv[key]] : [])].join(delimiter)
+  return env
+}
+
 function exec(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<{ code: number | null; error?: string }> {
   return new Promise(done => {
     const child = spawn(command, args, { cwd, env, stdio: 'inherit', shell: process.platform === 'win32' && command !== process.execPath })
@@ -81,7 +100,7 @@ export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: 
     await mkdir(outDir, { recursive: true })
     const out = resolve(outDir, `${encodeURIComponent(unit.package)}.json`)
     await rm(out, { force: true })
-    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, `--fsModuleCachePath=${resolve(root, '.vitest-impact', 'cache', 'modules')}`, ...unit.files], cwd, startEnv))
+    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, `--fsModuleCachePath=${resolve(root, '.vitest-impact', 'cache', 'modules')}`, ...unit.files], cwd, { ...startEnv, ...packageEnv(root, unit.dir) }))
     // No usable report: the planned files become missingFiles, and the cause is recorded.
     let text: string | null = null
     try { text = await readFile(out, 'utf8') } catch { errors.push(`${unit.package}: no JSON report`) }

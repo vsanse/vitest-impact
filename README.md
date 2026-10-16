@@ -58,8 +58,11 @@ If the root has a `pnpm-workspace.yaml` (its `packages:` list) or a `package.jso
 - `process.cwd()` in a package's tests is the package folder, as with `vitest run` inside that folder. It works in the shared process, which uses only the `forks` pool (a shim calls `process.chdir`), including `isolate: false`. Any other pool runs separately (see below). The shim was also shown to work with `vmForks`, but the tool separates that pool by policy. See [docs/decisions/cwd-parity.md](docs/decisions/cwd-parity.md).
 
 - Environment: like `vitest run`, the tool sets `TEST=true`, `VITEST=true` and `NODE_ENV=test` (unless `NODE_ENV` is already set) before it loads any config, so configs and tests see the values plain Vitest gives them. Separate and script units start from the environment the tool was started with, not from the tool's own process.
+- Package-manager variables: each Vitest package, shared or separate, gets `npm_package_name`, `npm_package_version` (when its `package.json` has them), `npm_lifecycle_event=test`, and the `node_modules/.bin` of its folder and of each folder above it up to the root first on `PATH`, as with `npm run test` in its folder. Script packages run through the package manager, which sets these itself.
 
 **Known gaps of the working-folder guarantee:** the package config file is loaded with the repo root as the working folder, and Vite plugins run in the main process, so code in either that calls `process.cwd()` sees the repo root. A package with `globalSetup` runs separately, because global setup also sees the repo root.
+
+**Known gaps of the environment:** other variables a package manager sets (`npm_package_json`, `npm_lifecycle_script`, `npm_package_*` fields other than name and version, `npm_config_*`, `INIT_CWD`, and pnpm's or yarn's own) keep the values the tool was started with, and the package manager's own `PATH` additions (such as `node-gyp-bin`) are not made. Package configs and Vite plugins run in the main process, which has the tool's environment. In single-project mode the tests see the environment the tool was started with.
 
 ### Packages that run in their own process
 

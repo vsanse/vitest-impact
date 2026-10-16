@@ -479,3 +479,18 @@ test('a source change in a package another package depends on runs the full set'
   expect(run.code, run.output).toBe(1)
   expect(run.report.executed.find(t => t.file === 'packages/a/test/uses-b.test.ts')?.state).toBe('failed')
 })
+
+test('shared and separate packages see the variables and PATH that npm run test gives them', async () => {
+  const check = (name: string, dir: string) => "import { test, expect } from 'vitest'; import { delimiter } from 'node:path'\n" +
+    `test('npm env', () => {\n  expect(process.env.npm_package_name).toBe('${name}')\n  expect(process.env.npm_package_version).toBe('1.2.3')\n` +
+    `  expect(process.env.npm_lifecycle_event).toBe('test')\n  expect(process.env.PATH!.split(delimiter)[0]).toMatch(/\\/${dir}\\/node_modules\\/\\.bin$/)\n})\n`
+  const pkg = (name: string) => JSON.stringify({ name, version: '1.2.3', type: 'module', scripts: { test: 'vitest run' } })
+  const { root } = await workspaceFixture({ packages: {
+    'packages/a/package.json': pkg('@w/a'), 'packages/a/test/npm.test.ts': check('@w/a', 'packages\\/a'),
+    'packages/b/package.json': pkg('@w/b'), 'packages/b/test/npm.test.ts': check('@w/b', 'packages\\/b'),
+    'packages/b/vitest.config.ts': config("pool: 'threads'"),
+  } })
+  const run = await invoke(root, ['run', '--mode', 'full'], 60_000)
+  expect(run.code, run.output).toBe(0)
+  expect(run.report.executed.filter(t => t.file.endsWith('/npm.test.ts')).map(t => [t.project, t.state]).sort()).toEqual([['@w/a', 'passed'], ['@w/b', 'passed']])
+})

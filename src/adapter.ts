@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { TestProject, TestSpecification, Vitest, TestRunResult } from 'vitest/node'
 import type { ViteUserConfig } from 'vitest/config'
 import { localPath } from './git.js'
-import { TIMED_OUT } from './separate.js'
+import { TIMED_OUT, packageEnv } from './separate.js'
 import { versionPolicy } from './version.js'
 import type { FileResult, ResourceBudget, TestFile, WorkspacePackage } from './types.js'
 
@@ -135,7 +135,8 @@ export class VitestAdapter {
           if (limit < budget.maxWorkers && !budget.warnings.includes(kept)) budget.warnings.push(kept)
           project.config.maxWorkers = limit
           project.config.allowOnly = false
-          project.config.env = { ...project.config.env, VITEST_IMPACT_CWD: resolve(root, owner.dir) }
+          // The package's own `env` wins over what its package manager would set, as in its own run.
+          project.config.env = { ...packageEnv(root, owner.dir), ...project.config.env, VITEST_IMPACT_CWD: resolve(root, owner.dir) }
           project.config.setupFiles = [CWD_SHIM, ...project.config.setupFiles]
         }
         // Vitest runs one sequence.groupOrder at a time and needs one maxWorkers value per group:
