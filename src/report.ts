@@ -17,14 +17,15 @@ export function analyzeRun(plan: Plan, mode: RunReport['mode'], executed: FileRe
   const unitMissing = packages !== undefined && [...plan.scripts, ...plan.separate.map(s => s.package).filter(n => plan.decisions.some(t => t.project === n && expected.has(t.id)))].some(n => !results.has(n))
   const unitFailed = (packages ?? []).some(p => p.mode !== 'shared' && p.exitCode !== 0)
   const incomplete = unitMissing || missingFiles.length > 0 || unexpectedFiles.length > 0 || unhandledErrors.length > 0 || executed.some(t => t.state === 'queued' || t.state === 'pending' || t.pending > 0)
-  const validation = mode !== 'shadow' ? 'not-shadow' : incomplete ? 'incomplete' : misses.length ? 'missed-failures' : failed.length ? 'all-observed-failures-selected' : 'no-failures-observed'
+  const unreliable = incomplete || unitFailed
+  const validation = mode !== 'shadow' ? 'not-shadow' : unreliable ? 'incomplete' : misses.length ? 'missed-failures' : failed.length ? 'all-observed-failures-selected' : 'no-failures-observed'
   const duration = executed.reduce((sum, t) => sum + t.durationMs, 0)
   return {
     schemaVersion: 1, mode, plan, executed, packages: packages ?? [], unhandledErrors, executionMs, runLevelFailure,
     missingFiles, unexpectedFiles, missedFailingFiles: misses.map(t => t.file), validation,
-    observedFailureRecall: mode === 'shadow' && !incomplete && failed.length ? (failed.length - misses.length) / failed.length : null,
+    observedFailureRecall: mode === 'shadow' && !unreliable && failed.length ? (failed.length - misses.length) / failed.length : null,
     // Summed file execution durations are not a wall-clock or billing estimate.
-    estimatedSelectedDurationFraction: mode === 'shadow' && !incomplete && duration > 0
+    estimatedSelectedDurationFraction: mode === 'shadow' && !unreliable && duration > 0
       ? executed.filter(t => selected.has(t.id)).reduce((sum, t) => sum + t.durationMs, 0) / duration : null,
     exitCode: incomplete ? 2 : failed.length || runLevelFailure || unitFailed ? 1 : 0,
   }
@@ -40,6 +41,9 @@ export async function writeJson(file: string, value: unknown): Promise<void> {
 function safe(value: string): string { return value.replace(/[&<>`|\r\n]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '`': '&#96;', '|': '&#124;', '\r': ' ', '\n': ' ' }[c]!)) }
 export function markdownSummary(report: RunReport): string {
   const selected = report.plan.decisions.filter(t => t.selected).length
+  const units = (report.packages ?? []).filter(p => p.mode !== 'shared')
+    .map(p => ({ ...p, noReport: p.mode === 'separate' && !report.executed.some(t => t.project === p.name) }))
+    .filter(p => p.exitCode !== 0 || p.noReport)
   return `\n### Vitest Impact — ${report.mode}\n\n` +
     `| Metric | Result |\n| --- | --- |\n` +
     `| Planned files | ${selected} / ${report.plan.decisions.length} |\n` +
@@ -51,6 +55,7 @@ export function markdownSummary(report: RunReport): string {
     `| Exit code | ${report.exitCode} |\n` +
     `| Observed failing-file recall | ${report.observedFailureRecall === null ? 'Not measured' : `${(report.observedFailureRecall * 100).toFixed(1)}%`} |\n\n` +
     (report.plan.fallbackReasons.length ? `Full-run reasons:\n\n${report.plan.fallbackReasons.map(r => `- ${safe(r)}`).join('\n')}\n\n` : '') +
+    (units.length ? `Units that failed or produced no report:\n\n${units.map(u => `- ${safe(u.name)} (${u.mode}): exit code ${u.exitCode}${u.noReport ? ', no report' : ''}`).join('\n')}\n\n` : '') +
     (report.missedFailingFiles.length ? `Failures selection would have missed:\n\n${report.missedFailingFiles.map(r => `- ${safe(r)}`).join('\n')}\n\n` : '') +
     'Shadow mode runs the full suite. Passing runs do not establish failure recall. File-duration fractions are not wall-clock or cost savings.\n'
 }

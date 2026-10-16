@@ -47,22 +47,24 @@ export interface SeparateUnit {
   idsByFile: Map<string, string>
 }
 
-function exec(command: string, args: string[], cwd: string): Promise<number | null> {
+function exec(command: string, args: string[], cwd: string): Promise<{ code: number | null; error?: string }> {
   return new Promise(done => {
     const child = spawn(command, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' && command !== process.execPath })
-    child.on('error', () => done(null))
-    child.on('close', code => done(code))
+    child.on('error', error => done({ code: null, error: `could not start ${command}: ${(error as NodeJS.ErrnoException).code ?? error.message}` }))
+    child.on('close', code => done({ code }))
   })
 }
 
 // ponytail: separate units run one after another; run them in parallel within the budget if they dominate wall time.
-export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: number, outDir: string): Promise<{ result: PackageResult; files: FileResult[] }> {
+export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: number, outDir: string): Promise<{ result: PackageResult; files: FileResult[]; errors: string[] }> {
   const cwd = resolve(root, unit.dir)
   const start = performance.now()
   let exitCode: number | null
   let files: FileResult[] = []
+  const errors: string[] = []
+  const note = (run: { code: number | null; error?: string }) => { if (run.error) errors.push(`${unit.package}: ${run.error}`); return run.code }
   if (unit.kind === 'script') {
-    exitCode = await exec(packageManager(root), ['run', 'test'], cwd)
+    exitCode = note(await exec(packageManager(root), ['run', 'test'], cwd))
   } else {
     const require = createRequire(resolve(cwd, 'package.json'))
     const pkgFile = require.resolve('vitest/package.json')
@@ -71,9 +73,14 @@ export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: 
     await mkdir(outDir, { recursive: true })
     const out = resolve(outDir, `${encodeURIComponent(unit.package)}.json`)
     await rm(out, { force: true })
-    exitCode = await exec(process.execPath, [vitestBin, 'run', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, ...unit.files], cwd)
-    try { files = parseJsonReport(JSON.parse(await readFile(out, 'utf8')), root, unit.idsByFile, unit.package) }
-    catch { /* no usable report: the planned files become missingFiles */ }
+    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, ...unit.files], cwd))
+    // No usable report: the planned files become missingFiles, and the cause is recorded.
+    let text: string | null = null
+    try { text = await readFile(out, 'utf8') } catch { errors.push(`${unit.package}: no JSON report`) }
+    if (text !== null) {
+      try { files = parseJsonReport(JSON.parse(text), root, unit.idsByFile, unit.package) }
+      catch { errors.push(`${unit.package}: JSON report did not parse`) }
+    }
   }
-  return { result: { name: unit.package, mode: unit.kind === 'script' ? 'script' : 'separate', exitCode, durationMs: performance.now() - start }, files }
+  return { result: { name: unit.package, mode: unit.kind === 'script' ? 'script' : 'separate', exitCode, durationMs: performance.now() - start }, files, errors }
 }

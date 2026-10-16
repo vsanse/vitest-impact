@@ -64,7 +64,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     }) : { mode: 'full' as const, fallbackReasons: [...forced], ignoredChanges: [], decisions: [] }
     const separate = adapter?.separate() ?? []
     // A package with its own coverage settings always runs in full, so its coverage and thresholds stay complete.
-    const coveragePackages = new Set(separate.filter(s => s.reason === 'coverage').map(s => s.package))
+    const coveragePackages = adapter?.coveragePackages() ?? new Set<string>()
     for (const test of selection.decisions) {
       if (!coveragePackages.has(test.project)) continue
       test.selected = true
@@ -130,8 +130,10 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
           files: chosen.length === tests.length ? [] : chosen.map(t => resolve(root, t.file)),
           idsByFile: new Map(tests.map(t => [t.file, t.id] as const)),
         }
-        const { result, files: unitFiles } = await runSeparate(root, unit, resources.maxWorkers, outDir)
+        const workers = Math.min(resources.maxWorkers, adapter?.workerLimit(pkg.name) ?? resources.maxWorkers)
+        const { result, files: unitFiles, errors } = await runSeparate(root, unit, workers, outDir)
         results.push(result)
+        unhandled.push(...errors)
         files.push(...unitFiles)
       }
       report = analyzeRun(plan, mode, files, unhandled, performance.now() - runStart, runLevelFailure, results)

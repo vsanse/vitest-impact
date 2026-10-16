@@ -31,6 +31,7 @@ export class VitestAdapter {
     readonly context: Vitest, readonly root: string, readonly specs: TestSpecification[],
     private readonly owners: Map<TestProject, WorkspacePackage>, private readonly separated: { package: string; reason: string }[],
     readonly emptyPackages: string[],
+    private readonly coverage: Set<string>, private readonly limits: Map<string, number>,
     readonly version: string, readonly versionWarning?: string,
   ) {}
 
@@ -67,6 +68,8 @@ export class VitestAdapter {
       const owners = new Map<TestProject, WorkspacePackage>()
       let separated: { package: string; reason: string }[] = []
       let passWithNoTests = new Set<WorkspacePackage>()
+      const coverage = new Set<string>()
+      const limits = new Map<string, number>()
       if (!packages) {
         const project = context.projects[0]!
         if (!['forks', 'threads'].includes(String(project.config.pool)) || project.config.browser.enabled || project.config.typecheck.enabled) {
@@ -99,6 +102,13 @@ export class VitestAdapter {
           if (reason && !reasons.has(owner)) reasons.set(owner, reason)
         }
         separated = packages.filter(p => reasons.has(p)).map(p => ({ package: p.name, reason: reasons.get(p)! }))
+        for (const p of packages) if (own.get(p)!.coverage?.enabled) coverage.add(p.name)
+        // A package's own worker limit, read before the shared-project code below rewrites it.
+        for (const project of context.projects) {
+          const owner = owners.get(project)!
+          if ((project.config as Untyped).providedOptions?.maxWorkers === false) continue
+          limits.set(owner.name, Math.min(limits.get(owner.name) ?? Infinity, project.config.maxWorkers))
+        }
         passWithNoTests = new Set(packages.filter(p => own.get(p)!.passWithNoTests === true))
         cfg.maxWorkers = budget.maxWorkers
         const shared = context.projects.filter(project => !reasons.has(owners.get(project)!))
@@ -130,9 +140,15 @@ export class VitestAdapter {
       for (const p of empty) if (!passWithNoTests.has(p)) throw new Error(`No test files discovered in ${p.name}. Refusing an empty successful run.`)
       const emptyPackages = empty.map(p => p.name)
       separated = separated.filter(s => !emptyPackages.includes(s.package))
-      return new VitestAdapter(context, root, specs, owners, separated, emptyPackages, pkg.version, policy.selection ? undefined : policy.warning)
+      return new VitestAdapter(context, root, specs, owners, separated, emptyPackages, coverage, limits, pkg.version, policy.selection ? undefined : policy.warning)
     } catch (error) { await context.close(); throw error }
   }
+
+  /** Packages whose own config enables coverage, whatever else separates them. */
+  coveragePackages(): Set<string> { return this.coverage }
+
+  /** The worker limit a package sets in its own config, or undefined. */
+  workerLimit(name: string): number | undefined { return this.limits.get(name) }
 
   /** Packages that must not run in this process. */
   separate(): { package: string; reason: string }[] { return this.separated }

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { analyzeRun } from '../src/report.js'
+import { analyzeRun, markdownSummary } from '../src/report.js'
 import type { Plan, FileResult } from '../src/types.js'
 
 const plan = { decisions: [{ id: 'a', file: 'a.test.ts', selected: true }, { id: 'b', file: 'b.test.ts', selected: false }] } as Plan
@@ -34,7 +34,7 @@ test('a module that fails during collection counts as a failure', () => {
 
 const planWith = (ids: string[]) => ({
   decisions: ids.map(id => ({ id, file: `packages/b/test/${id.replace('id-', '')}.test.ts`, project: '@w/b', selected: true })),
-  separate: [{ package: '@w/b', reason: 'pool:threads' }], scripts: [],
+  separate: [{ package: '@w/b', reason: 'pool:threads' }], scripts: [], fallbackReasons: [], resources: { maxWorkers: 1 }, planningMs: 0,
 }) as unknown as Plan
 test('a separate package with no JSON report makes the run incomplete', () => {
   const report = analyzeRun(planWith(['id-u']), 'full', [], [], 10, false, [{ name: '@w/b', mode: 'separate', exitCode: 1, durationMs: 5 }])
@@ -47,4 +47,23 @@ test('a planned unit with no result is incomplete, and a failed process fails a 
   const done = (exitCode: number) => analyzeRun(planWith(['id-u']), 'full', [file], [], 10, false, [{ name: '@w/b', mode: 'separate', exitCode, durationMs: 5 }])
   expect(done(0).exitCode).toBe(0)
   expect(done(1).exitCode).toBe(1)
+})
+
+test('a failed unit makes shadow validation incomplete and drops recall and fraction', () => {
+  const file = { ...result('id-u'), file: 'packages/b/test/u.test.ts', project: '@w/b' }
+  const report = analyzeRun(planWith(['id-u']), 'shadow', [file], [], 10, false, [{ name: '@w/b', mode: 'separate', exitCode: 1, durationMs: 5 }])
+  expect(report.exitCode).toBe(1)
+  expect(report.validation).toBe('incomplete')
+  expect(report.estimatedSelectedDurationFraction).toBeNull()
+  expect(report.observedFailureRecall).toBeNull()
+})
+test('the summary lists units that failed or produced no report', () => {
+  const file = { ...result('id-u'), file: 'packages/b/test/u.test.ts', project: '@w/b' }
+  const report = analyzeRun(planWith(['id-u']), 'full', [], [], 10, false, [{ name: '@w/b', mode: 'separate', exitCode: 7, durationMs: 5 }, { name: '@w/c', mode: 'script', exitCode: 3, durationMs: 5 }])
+  const text = markdownSummary(report)
+  expect(text).toContain('@w/b')
+  expect(text).toContain('exit code 7')
+  expect(text).toContain('@w/c')
+  expect(text).toContain('exit code 3')
+  expect(markdownSummary(analyzeRun(planWith(['id-u']), 'full', [file], [], 10, false, [{ name: '@w/b', mode: 'separate', exitCode: 0, durationMs: 5 }]))).not.toContain('exit code')
 })

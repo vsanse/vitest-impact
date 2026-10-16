@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'vitest'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { packageManager, parseJsonReport } from '../src/separate.js'
+import { packageManager, parseJsonReport, runSeparate } from '../src/separate.js'
 
 test('parseJsonReport maps Vitest JSON results to file results', () => {
   const json = { testResults: [{ name: '/r/packages/b/test/u.test.ts', status: 'failed', startTime: 100, endTime: 350,
@@ -32,4 +32,11 @@ test('packageManager reads the packageManager field, then the lockfile, else npm
   expect(packageManager(await repo({ 'package.json': '{}', 'pnpm-lock.yaml': '' }))).toBe('pnpm')
   expect(packageManager(await repo({ 'package.json': '{"packageManager":"bun@1"}' }))).toBe('npm')
   expect(packageManager(await repo({}))).toBe('npm')
+})
+
+test('a script that cannot start is reported as an error, not a plain exit code', async () => {
+  const dir = await repo({ 'package.json': '{}' })
+  const run = await runSeparate(dir, { package: '@w/x', dir: 'missing', kind: 'script', files: [], idsByFile: new Map() }, 1, resolve(dir, 'out'))
+  expect(run.result.exitCode).toBeNull()
+  expect(run.errors).toEqual(['@w/x: could not start npm: ENOENT'])
 })
