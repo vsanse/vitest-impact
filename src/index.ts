@@ -5,13 +5,13 @@ import { VitestAdapter } from './adapter.js'
 import { loadConfig } from './config.js'
 import { changedFiles, localPath, workspaceFingerprint } from './git.js'
 import { selectTests } from './planner.js'
-import { budgetResources } from './resources.js'
+import { budgetResources, startLoadSampler } from './resources.js'
 import { analyzeRun, writeJson, writeSummary } from './report.js'
 import { withRunLock } from './lock.js'
 import { discoverPackages, filterPackages } from './workspace.js'
 import { parseShard, scriptInShard, shardRunSet } from './shard.js'
 import { runSeparate } from './separate.js'
-import type { FileResult, ImpactConfig, PackageResult, Plan, RunReport, WorkspacePackage } from './types.js'
+import type { FileResult, ImpactConfig, LoadSummary, PackageResult, Plan, RunReport, WorkspacePackage } from './types.js'
 
 export type { ImpactConfig, Plan, RunReport } from './types.js'
 export { selectTests } from './planner.js'
@@ -110,6 +110,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     if (emptyShard) console.log(`Shard ${shard.index}/${shard.count} has no test files.`)
     const runStart = performance.now()
     let report: RunReport
+    const stopLoad = startLoadSampler()
     try {
       const files: FileResult[] = []
       const unhandled: string[] = []
@@ -124,7 +125,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
         await adapter.close()
         runLevelFailure = Number(process.exitCode ?? 0) !== 0
         for (const name of new Set(files.map(f => f.project))) {
-          results.push({ name, mode: 'shared', exitCode: null, durationMs: files.filter(f => f.project === name).reduce((sum, f) => sum + f.durationMs, 0) })
+          results.push({ name, mode: 'shared', exitCode: null, durationMs: files.filter(f => f.project === name).reduce((sum, f) => sum + f.durationMs, 0), phases: null })
         }
       }
       const outDir = resolve(output, 'separate')
@@ -147,9 +148,9 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
         unhandled.push(...errors)
         files.push(...unitFiles)
       }
-      report = analyzeRun(plan, mode, files, unhandled, performance.now() - runStart, runLevelFailure, results)
+      report = analyzeRun(plan, mode, files, unhandled, performance.now() - runStart, runLevelFailure, results, loadOrNull(stopLoad()))
     } catch (error) {
-      report = analyzeRun(plan, mode, [], [error instanceof Error ? error.stack ?? error.message : String(error)], performance.now() - runStart)
+      report = analyzeRun(plan, mode, [], [error instanceof Error ? error.stack ?? error.message : String(error)], performance.now() - runStart, false, undefined, loadOrNull(stopLoad()))
     }
     await writeJson(resolve(output, 'report.json'), report)
     await writeSummary(report, resolve(output, 'summary.md'))
@@ -179,3 +180,6 @@ async function workspacePackages(root: string, options: Options, isolated: strin
   }
   return packages
 }
+
+// os.loadavg() is all zeros on Windows, so there is no load to report.
+function loadOrNull(load: LoadSummary): LoadSummary | null { return load.peakPerCpu > 0 ? load : null }

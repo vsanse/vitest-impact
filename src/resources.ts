@@ -1,6 +1,6 @@
-import { availableParallelism, freemem, totalmem } from 'node:os'
+import { availableParallelism, freemem, loadavg, totalmem } from 'node:os'
 import { readFileSync } from 'node:fs'
-import type { ImpactConfig, ResourceBudget } from './types.js'
+import type { ImpactConfig, LoadSummary, ResourceBudget } from './types.js'
 
 export interface HostCapacity { cpu: number; availableMemoryMb: number }
 export interface MemoryInput {
@@ -58,4 +58,19 @@ export function budgetResources(options: ImpactConfig['resources'], host = detec
   if (!options.workerMemoryMb) warnings.push('Using an unmeasured 512 MB per-worker assumption. Calibrate this on your suite.')
   if (maxWorkers < requested) warnings.push(`Capped requested ${requested} workers to ${maxWorkers} for CPU/memory capacity.`)
   return { maxWorkers, availableCpu: host.cpu, memoryBudgetMb, workerMemoryMb, reserveMemoryMb, memoryEstimate: options.workerMemoryMb ? 'configured' : 'default-assumption', warnings }
+}
+
+/** Samples the 1-minute load average per CPU until the returned function is called, which returns the summary. */
+export function startLoadSampler(intervalMs = 1000): () => LoadSummary {
+  const cpus = availableParallelism()
+  const values: number[] = []
+  const sample = () => values.push(loadavg()[0]! / cpus)
+  sample()
+  const timer = setInterval(sample, intervalMs)
+  timer.unref()
+  return () => {
+    clearInterval(timer)
+    sample()
+    return { peakPerCpu: Math.max(...values), meanPerCpu: values.reduce((a, b) => a + b, 0) / values.length, samples: values.length }
+  }
 }

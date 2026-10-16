@@ -76,8 +76,14 @@ export interface FileResult {
   failed: number
   skipped: number
   pending: number
+  /** Time per phase; null when the runner gives none (separate units). */
+  phases: Phases | null
+  /** Full names of tests whose error matches /^(Test|Hook) timed out in \d+ms/. */
+  timedOut: string[]
 }
-export interface PackageResult { name: string; mode: 'shared' | 'separate' | 'script'; exitCode: number | null; durationMs: number }
+export interface Phases { importMs: number; environmentMs: number; setupMs: number; testsMs: number }
+export interface LoadSummary { peakPerCpu: number; meanPerCpu: number; samples: number }
+export interface PackageResult { name: string; mode: 'shared' | 'separate' | 'script'; exitCode: number | null; durationMs: number; phases: Phases | null }
 export interface RunReport {
   schemaVersion: 1
   mode: 'shadow' | 'selected' | 'full'
@@ -87,6 +93,9 @@ export interface RunReport {
   unhandledErrors: string[]
   runLevelFailure: boolean
   executionMs: number
+  slowestFiles: { file: string; durationMs: number }[]
+  timeouts: { file: string; test: string }[]
+  load: LoadSummary | null
   missingFiles: string[]
   unexpectedFiles: string[]
   missedFailingFiles: string[]

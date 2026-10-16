@@ -20,20 +20,22 @@ export function packageManager(root: string): 'pnpm' | 'yarn' | 'npm' {
   return 'npm'
 }
 
-interface JsonReport { testResults?: { name: string; status: string; startTime: number; endTime: number; assertionResults?: { status: string }[] }[] }
+interface JsonReport { testResults?: { name: string; status: string; startTime: number; endTime: number; assertionResults?: { status: string; fullName?: string; title?: string; ancestorTitles?: string[]; failureMessages?: string[] }[] }[] }
 
 export function parseJsonReport(json: unknown, root: string, idsByFile: Map<string, string>, project: string): FileResult[] {
   return ((json as JsonReport).testResults ?? []).map(result => {
     const file = localPath(root, result.name)
     const counts = { passed: 0, failed: 0, skipped: 0, pending: 0 }
+    const timedOut: string[] = []
     for (const test of result.assertionResults ?? []) {
+      if (test.failureMessages?.some(m => /^(Test|Hook) timed out in \d+ms/.test(m))) timedOut.push(test.fullName ?? [...(test.ancestorTitles ?? []), test.title ?? ''].join(' > '))
       if (test.status === 'passed') counts.passed++
       else if (test.status === 'failed') counts.failed++
       else if (test.status === 'pending') counts.pending++
       else counts.skipped++
     }
     // A file the plan does not know keeps its path as id, so the plan check reports it as unexpected.
-    return { id: idsByFile.get(file) ?? file, file, project, state: result.status, durationMs: result.endTime - result.startTime, ...counts }
+    return { id: idsByFile.get(file) ?? file, file, project, state: result.status, durationMs: result.endTime - result.startTime, ...counts, phases: null, timedOut }
   })
 }
 
@@ -82,5 +84,5 @@ export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: 
       catch { errors.push(`${unit.package}: JSON report did not parse`) }
     }
   }
-  return { result: { name: unit.package, mode: unit.kind === 'script' ? 'script' : 'separate', exitCode, durationMs: performance.now() - start }, files, errors }
+  return { result: { name: unit.package, mode: unit.kind === 'script' ? 'script' : 'separate', exitCode, durationMs: performance.now() - start, phases: null }, files, errors }
 }

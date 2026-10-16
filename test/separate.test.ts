@@ -8,7 +8,7 @@ test('parseJsonReport maps Vitest JSON results to file results', () => {
   const json = { testResults: [{ name: '/r/packages/b/test/u.test.ts', status: 'failed', startTime: 100, endTime: 350,
     assertionResults: [{ status: 'passed' }, { status: 'failed' }, { status: 'skipped' }] }] }
   expect(parseJsonReport(json, '/r', new Map([['packages/b/test/u.test.ts', 'id-u']]), '@w/b')).toEqual([
-    { id: 'id-u', file: 'packages/b/test/u.test.ts', project: '@w/b', state: 'failed', durationMs: 250, passed: 1, failed: 1, skipped: 1, pending: 0 },
+    { id: 'id-u', file: 'packages/b/test/u.test.ts', project: '@w/b', state: 'failed', durationMs: 250, passed: 1, failed: 1, skipped: 1, pending: 0, phases: null, timedOut: [] },
   ])
 })
 
@@ -39,4 +39,11 @@ test('a script that cannot start is reported as an error, not a plain exit code'
   const run = await runSeparate(dir, { package: '@w/x', dir: 'missing', kind: 'script', files: [], idsByFile: new Map() }, 1, resolve(dir, 'out'))
   expect(run.result.exitCode).toBeNull()
   expect(run.errors).toEqual(['@w/x: could not start npm: ENOENT'])
+})
+
+test('parseJsonReport lists tests whose failure is a timeout', () => {
+  const json = { testResults: [{ name: '/r/s.test.ts', status: 'failed', startTime: 0, endTime: 1, assertionResults: [
+    { status: 'failed', fullName: 'slow waits', failureMessages: ['Test timed out in 5000ms.'] },
+    { status: 'failed', fullName: 'other', failureMessages: ['AssertionError'] }] }] }
+  expect(parseJsonReport(json, '/r', new Map(), 'p')[0]!.timedOut).toEqual(['slow waits'])
 })

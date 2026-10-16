@@ -191,7 +191,11 @@ export class VitestAdapter {
     return result.testModules.map(module => {
       const counts = { passed: 0, failed: 0, skipped: 0, pending: 0 }
       for (const test of module.children.allTests()) counts[test.result().state]++
-      return { id: module.id, file: localPath(this.root, module.moduleId), project: this.owners.get(module.project)?.name ?? module.project.name, state: module.state(), durationMs: module.diagnostic().duration, ...counts }
+      const timedOut = [...module.children.allTests()].filter(t => t.result().errors?.some(e => /^(Test|Hook) timed out in \d+ms/.test(e.message))).map(t => t.fullName)
+      const d = module.diagnostic()
+      // importMs = collectDuration, environmentMs = environmentSetupDuration, setupMs = prepareDuration + setupDuration, testsMs = duration
+      const phases = { importMs: d.collectDuration, environmentMs: d.environmentSetupDuration, setupMs: d.prepareDuration + d.setupDuration, testsMs: d.duration }
+      return { id: module.id, file: localPath(this.root, module.moduleId), project: this.owners.get(module.project)?.name ?? module.project.name, state: module.state(), durationMs: d.duration, ...counts, phases, timedOut }
     })
   }
   close(): Promise<void> { return this.context.close() }

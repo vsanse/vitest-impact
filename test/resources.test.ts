@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { availableMemoryBytes, budgetResources } from '../src/resources.js'
+import { availableMemoryBytes, budgetResources, startLoadSampler } from '../src/resources.js'
 import { parseConfig } from '../src/config.js'
 import { parseNameStatus } from '../src/git.js'
 
@@ -36,4 +36,10 @@ test('macOS counts total memory, because its free figure leaves out reclaimable 
   expect(availableMemoryBytes({ platform: 'darwin', freeBytes: 150 * MB, processAvailableBytes: 150 * MB, totalBytes: 16384 * MB, cgroupMaxBytes: null, cgroupUsedBytes: null })).toBe(16384 * MB)
   expect(availableMemoryBytes({ platform: 'linux', freeBytes: 4000 * MB, processAvailableBytes: 3000 * MB, totalBytes: 8192 * MB, cgroupMaxBytes: null, cgroupUsedBytes: null })).toBe(3000 * MB)
   expect(availableMemoryBytes({ platform: 'linux', freeBytes: 4000 * MB, processAvailableBytes: null, totalBytes: 8192 * MB, cgroupMaxBytes: 2048 * MB, cgroupUsedBytes: 1024 * MB })).toBe(1024 * MB)
+})
+
+test('the load sampler returns a summary with at least two samples', () => {
+  const summary = startLoadSampler(1000)()
+  expect(summary.samples).toBe(2)
+  expect(summary.peakPerCpu).toBeGreaterThanOrEqual(summary.meanPerCpu)
 })
