@@ -65,6 +65,7 @@ export function markdownSummary(report: RunReport): string {
     `| Exit code | ${report.exitCode} |\n` +
     `| Observed failing-file recall | ${report.observedFailureRecall === null ? 'Not measured' : `${(report.observedFailureRecall * 100).toFixed(1)}%`} |\n\n` +
     (report.plan.fallbackReasons.length ? `Full-run reasons:\n\n${report.plan.fallbackReasons.map(r => `- ${safe(r)}`).join('\n')}\n\n` : '') +
+    (report.plan.separate.length ? `Packages in their own process:\n\n${report.plan.separate.map(s => `- ${safe(s.package)}: ${safe(s.reason)}`).join('\n')}\n\n` : '') +
     (units.length ? `Units that failed or produced no report:\n\n${units.map(u => `- ${safe(u.name)} (${u.mode}): exit code ${u.exitCode}${u.noReport ? ', no report' : ''}`).join('\n')}\n\n` : '') +
     (report.packages.length ? `Time per package:\n\n| Package | Mode | Files | Duration | Import | Environment | Tests |\n| --- | --- | --- | --- | --- | --- | --- |\n${report.packages.map(p => `| ${safe(p.name)} | ${p.mode} | ${report.executed.filter(t => t.project === p.name).length} | ${sec(p.durationMs)} | ${p.phases ? sec(p.phases.importMs) : '-'} | ${p.phases ? sec(p.phases.environmentMs) : '-'} | ${p.phases ? sec(p.phases.testsMs) : '-'} |`).join('\n')}\n\n` : '') +
     (report.slowestFiles.length ? `Slowest files:\n\n${report.slowestFiles.map(f => `- ${safe(f.file)}: ${sec(f.durationMs)}`).join('\n')}\n\n` : '') +

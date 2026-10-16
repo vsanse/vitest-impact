@@ -117,7 +117,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
     if (emptyShard) console.log(`Shard ${shard.index}/${shard.count} has no test files.`)
     const runStart = performance.now()
     let report: RunReport
-    const stopLoad = startLoadSampler()
+    const stopLoad = startLoadSampler(resources.availableCpu)
     try {
       const files: FileResult[] = []
       const unhandled: string[] = []

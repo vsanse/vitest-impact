@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest'
+import { loadavg } from 'node:os'
 import { availableMemoryBytes, budgetResources, startLoadSampler } from '../src/resources.js'
 import { parseConfig } from '../src/config.js'
 import { parseNameStatus } from '../src/git.js'
@@ -39,7 +40,16 @@ test('macOS counts total memory, because its free figure leaves out reclaimable 
 })
 
 test('the load sampler returns a summary with at least two samples', () => {
-  const summary = startLoadSampler(1000)()
+  const summary = startLoadSampler(1)()
   expect(summary.samples).toBe(2)
   expect(summary.peakPerCpu).toBeGreaterThanOrEqual(summary.meanPerCpu)
+})
+
+test("load per CPU divides by the CPU count it is given (the budget's, cgroup-aware)", () => {
+  const before = loadavg()[0]!
+  const summary = startLoadSampler(4)()
+  const after = loadavg()[0]!
+  // Both samples fall between the two reads, so each is one of the two values divided by 4.
+  expect(summary.peakPerCpu).toBeGreaterThanOrEqual(Math.min(before, after) / 4 - 1e-9)
+  expect(summary.peakPerCpu).toBeLessThanOrEqual(Math.max(before, after) / 4 + 1e-9)
 })

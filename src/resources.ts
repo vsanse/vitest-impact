@@ -60,9 +60,11 @@ export function budgetResources(options: ImpactConfig['resources'], host = detec
   return { maxWorkers, availableCpu: host.cpu, memoryBudgetMb, workerMemoryMb, reserveMemoryMb, memoryEstimate: options.workerMemoryMb ? 'configured' : 'default-assumption', warnings }
 }
 
-/** Samples the 1-minute load average per CPU until the returned function is called, which returns the summary. */
-export function startLoadSampler(intervalMs = 1000): () => LoadSummary {
-  const cpus = availableParallelism()
+/**
+ * Samples the 1-minute load average per CPU until the returned function is called, which returns the summary.
+ * `cpus` is the budget's CPU count (detectCapacity, cgroup-aware), so "per CPU" means the same CPUs the workers get.
+ */
+export function startLoadSampler(cpus: number, intervalMs = 1000): () => LoadSummary {
   const values: number[] = []
   const sample = () => values.push(loadavg()[0]! / cpus)
   sample()

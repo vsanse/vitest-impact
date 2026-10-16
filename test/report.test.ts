@@ -89,3 +89,9 @@ test('timeouts are listed with the peak load of the run', () => {
   expect(report.timeouts).toEqual([{ file: 'packages/a/slow.test.ts', test: 'slow > waits' }])
   expect(markdownSummary(report)).toContain('Peak load per CPU: 3.50')
 })
+test('the summary lists the packages that run in their own process, with their reasons', () => {
+  const plan = { ...planWith(['id-u']), separate: [{ package: '@w/b', reason: 'pool:threads' }, { package: '@w/c', reason: 'isolated-in-config' }] } as Plan
+  const text = markdownSummary(analyzeRun(plan, 'full', [], [], 10, false, []))
+  expect(text).toContain('Packages in their own process:\n\n- @w/b: pool:threads\n- @w/c: isolated-in-config\n')
+  expect(markdownSummary(analyzeRun(planFor([]), 'full', [], [], 10, false, []))).not.toContain('own process')
+})
