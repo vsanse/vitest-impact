@@ -27,6 +27,10 @@
 - The summary lists the packages that run in their own process, with their reasons. Load per CPU uses the budget's CPU count.
 - `toolVersion` comes from `package.json`.
 - Example workflow: also runs on pushes to the default branch, keeps the cache out of the artifact, and leaves `node_modules` out of the cache key.
+- One shared Vitest process per Vitest copy: each Vitest package runs on the copy it resolves, the one its test files import (pnpm can install several copies of one version). Groups run one after the other with the full worker budget, each with its own Vite cache folder. The version policy applies to every copy, a package from which `vitest` cannot be resolved exits 2, and `report.json` lists `sharedGroups`.
+- The working-folder shim is written to `.vitest-impact/cwd-shim.mjs`, inside the repo, so client environments (jsdom) load it when the tool is installed outside the repo root.
+- The Git checks ignore `.vitest-impact/`, also when `.gitignore` does not list it ("Workspace changed during planning" and full sets from the tool's own files).
+- Workspace dependents are found transitively, through every discovered package, so a change reaches a package in the run through packages without tests too.
 
 ## 0.1.0
 
