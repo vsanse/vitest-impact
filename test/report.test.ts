@@ -94,4 +94,9 @@ test('the summary lists the packages that run in their own process, with their r
   const text = markdownSummary(analyzeRun(plan, 'full', [], [], 10, false, []))
   expect(text).toContain('Packages in their own process:\n\n- @w/b: pool:threads\n- @w/c: isolated-in-config\n')
   expect(markdownSummary(analyzeRun(planFor([]), 'full', [], [], 10, false, []))).not.toContain('own process')
+  // Every package runs in its own process: no shared process, so no shared-process line.
+  const apart = { ...plan, packages: ['@w/b', '@w/c'], sharedGroups: [] } as Plan
+  expect(markdownSummary(analyzeRun(apart, 'full', [], [], 10, false, []))).not.toContain('Shared processes')
+  const shared = { ...apart, sharedGroups: [{ vitest: 'node_modules/vitest', packages: ['@w/a'] }] } as Plan
+  expect(markdownSummary(analyzeRun(shared, 'full', [], [], 10, false, []))).toContain('Shared processes: 1 (one per Vitest copy)')
 })

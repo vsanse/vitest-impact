@@ -64,7 +64,7 @@ export function markdownSummary(report: RunReport): string {
     `| Shadow validation | ${report.validation} |\n` +
     `| Exit code | ${report.exitCode} |\n` +
     `| Observed failing-file recall | ${report.observedFailureRecall === null ? 'Not measured' : `${(report.observedFailureRecall * 100).toFixed(1)}%`} |\n\n` +
-    (report.plan.packages?.length ? `Shared processes: ${report.sharedGroups.length} (one per Vitest copy)\n\n` : '') +
+    (report.sharedGroups?.length ? `Shared processes: ${report.sharedGroups.length} (one per Vitest copy)\n\n` : '') +
     (report.plan.fallbackReasons.length ? `Full-run reasons:\n\n${report.plan.fallbackReasons.map(r => `- ${safe(r)}`).join('\n')}\n\n` : '') +
     (report.plan.separate.length ? `Packages in their own process:\n\n${report.plan.separate.map(s => `- ${safe(s.package)}: ${safe(s.reason)}`).join('\n')}\n\n` : '') +
     (units.length ? `Units that failed or produced no report:\n\n${units.map(u => `- ${safe(u.name)} (${u.mode}): exit code ${u.exitCode}${u.noReport ? ', no report' : ''}`).join('\n')}\n\n` : '') +

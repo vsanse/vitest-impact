@@ -531,12 +531,25 @@ test('each package runs on the Vitest copy it resolves, one shared process per c
     { vitest: 'packages/b/node_modules/vitest', packages: ['@w/b'] },
   ])
   expect(await readFile(resolve(root, '.vitest-impact/summary.md'), 'utf8')).toContain('Shared processes: 2 (one per Vitest copy)')
+  // One Vite cache folder per copy, each with its own results.json.
+  const caches = await readdir(resolve(root, '.vitest-impact/cache/vite'))
+  expect(caches).toHaveLength(2)
+  for (const id of caches) expect((await readdir(resolve(root, '.vitest-impact/cache/vite', id), { recursive: true })).some(f => f.endsWith('results.json'))).toBe(true)
   // The second copy's group runs after the first one closed, and still reports a failure as a failure.
   await put(root, 'packages/b/test/fail.test.ts', "import { test, expect } from 'vitest'; test('fails', () => expect(1).toBe(2))\n")
   const failing = await invoke(root, ['run', '--mode', 'full'], 60_000)
   expect(failing.code, failing.output).toBe(1)
   expect(failing.report.executed).toHaveLength(9)
   expect(failing.report.executed.filter(t => t.state !== 'passed').map(t => t.file)).toEqual(['packages/b/test/fail.test.ts'])
+})
+
+test('a project name used by packages of two Vitest copies is refused, as Vitest refuses it within one', async () => {
+  const named = config("name: 'unit'")
+  const { root } = await workspaceFixture({ packages: { 'packages/a/vitest.config.ts': named, 'packages/b/vitest.config.ts': named } })
+  await ownVitest(root, 'packages/b')
+  const run = await invoke(root, ['run', '--mode', 'full'], 60_000)
+  expect(run.code, run.output).toBe(2)
+  expect(run.output).toContain('Project name "unit" from "packages/b/vitest.config.ts" is not unique. The project is already defined by "packages/a/vitest.config.ts". All projects should have unique names. Make sure your configuration is correct.')
 })
 
 test('check runs the packages of each Vitest copy in that copy\'s shared process', async () => {

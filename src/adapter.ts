@@ -91,6 +91,14 @@ export class VitestAdapter {
         const { context, specs } = await VitestAdapter.openGroup(root, budget, copy, cacheDir, shim, packages ? members : undefined, options, found)
         groups.push({ context, specs, vitest, members })
       }
+      // Vitest refuses a project name used twice only within one instance. Task ids hash the name, so refuse it across copies too.
+      const names = new Map<string, string>()
+      for (const project of groups.flatMap(g => g.context.projects)) {
+        const file = found.owners.get(project)?.vitestConfig ?? ''
+        const earlier = names.get(project.name)
+        if (earlier !== undefined) throw new Error(`Project name "${project.name}" from "${file}" is not unique. The project is already defined by "${earlier}". All projects should have unique names. Make sure your configuration is correct.`)
+        names.set(project.name, file)
+      }
       const specs = groups.flatMap(g => g.specs)
       if (!specs.length) throw new Error('No test files discovered. Refusing an empty successful run.')
       const empty = (packages ?? []).filter(p => !specs.some(spec => found.owners.get(spec.project) === p))
