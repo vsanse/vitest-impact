@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'vitest'
-import { mkdir, readdir, readFile, rm, symlink } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
+import { relative, resolve } from 'node:path'
 import { makeFixture, makeWorkspaceFixture, put, invoke, git, projectRoot } from '../scripts/fixture.mjs'
 
 const cleanups: (() => Promise<void>)[] = []
@@ -513,4 +514,71 @@ test('check says when a package on the isolated list passes in the shared proces
   expect(check.code, check.output).toBe(0)
   expect(check.output).toContain('@w/b: on the isolated list, passes shared -> can be removed')
   expect(check.output).not.toContain('@w/a: on the isolated list')
+})
+
+// Passes only when the vitest a test file imports is the copy whose worker runs it (a forks worker's process.argv[1] is that copy's worker entry).
+const sameCopy = "import { test, expect } from 'vitest'; import { realpathSync } from 'node:fs'; import { createRequire } from 'node:module'; import { dirname } from 'node:path'\n" +
+  "test('runs on the vitest it imports', () => expect(realpathSync(process.argv[1]!)).toContain(`${dirname(realpathSync(createRequire(import.meta.url).resolve('vitest/package.json')))}/`))\n"
+/** A real second copy of the tool's vitest in `dir` (its dependencies resolve upward to the shared install). */
+async function ownVitest(root: string, dir: string, version?: string) {
+  const copy = resolve(root, dir, 'node_modules/vitest')
+  await cp(resolve(projectRoot, 'node_modules/vitest'), copy, { recursive: true })
+  if (version) await writeFile(resolve(copy, 'package.json'), JSON.stringify({ ...JSON.parse(await readFile(resolve(copy, 'package.json'), 'utf8')), version }))
+}
+
+test('each package runs on the Vitest copy it resolves, one shared process per copy', async () => {
+  const { root } = await workspaceFixture({ packages: { 'packages/a/test/copy.test.ts': sameCopy, 'packages/b/test/copy.test.ts': sameCopy } })
+  await ownVitest(root, 'packages/b')
+  const run = await invoke(root, ['run', '--mode', 'full'], 60_000)
+  expect(run.code, run.output).toBe(0)
+  expect(run.report.executed.filter(t => t.file.endsWith('/copy.test.ts')).map(t => [t.file, t.state]).sort()).toEqual([
+    ['packages/a/test/copy.test.ts', 'passed'], ['packages/b/test/copy.test.ts', 'passed'],
+  ])
+  expect(run.report.sharedGroups).toEqual([
+    { vitest: relative(realpathSync(root), realpathSync(resolve(projectRoot, 'node_modules/vitest'))), packages: ['@w/a'] },
+    { vitest: 'packages/b/node_modules/vitest', packages: ['@w/b'] },
+  ])
+  expect(await readFile(resolve(root, '.vitest-impact/summary.md'), 'utf8')).toContain('Shared processes: 2 (one per Vitest copy)')
+  // The second copy's group runs after the first one closed, and still reports a failure as a failure.
+  await put(root, 'packages/b/test/fail.test.ts', "import { test, expect } from 'vitest'; test('fails', () => expect(1).toBe(2))\n")
+  const failing = await invoke(root, ['run', '--mode', 'full'], 60_000)
+  expect(failing.code, failing.output).toBe(1)
+  expect(failing.report.executed).toHaveLength(9)
+  expect(failing.report.executed.filter(t => t.state !== 'passed').map(t => t.file)).toEqual(['packages/b/test/fail.test.ts'])
+})
+
+test('check runs the packages of each Vitest copy in that copy\'s shared process', async () => {
+  const { root } = await workspaceFixture({ packages: { 'packages/b/test/copy.test.ts': sameCopy } })
+  await ownVitest(root, 'packages/b')
+  const check = await invoke(root, ['check'], 90_000)
+  expect(check.code, check.output).toBe(0)
+  expect(check.output).not.toContain('isolated candidate')
+})
+
+test('a Vitest package from which vitest cannot be resolved exits 2', async () => {
+  const { root } = await workspaceFixture()
+  // vitest resolves from packages/a only.
+  await rm(resolve(root, 'node_modules'))
+  for (const dir of ['node_modules', 'packages/a/node_modules']) await mkdir(resolve(root, dir), { recursive: true })
+  for (const entry of await readdir(resolve(projectRoot, 'node_modules'))) if (entry !== 'vitest' && !entry.startsWith('.')) await symlink(resolve(projectRoot, 'node_modules', entry), resolve(root, 'node_modules', entry))
+  await symlink(resolve(projectRoot, 'node_modules/vitest'), resolve(root, 'packages/a/node_modules/vitest'))
+  const plan = await invoke(root, ['plan'])
+  expect(plan.code, plan.output).toBe(2)
+  expect(plan.output).toContain('Cannot resolve vitest from packages/b/package.json')
+})
+
+test('the version policy applies to every Vitest copy', async () => {
+  const { root, base } = await workspaceFixture()
+  await ownVitest(root, 'packages/b', '5.0.99')
+  await put(root, 'packages/a/src/index.ts', "export const name = 'a' as string\n")
+  const plan = await invoke(root, ['plan', '--base', base])
+  expect(plan.code, plan.output).toBe(0)
+  expect(plan.plan.fallbackReasons).toEqual(['untested-vitest-version: 5.0.99'])
+  expect(plan.plan.mode).toBe('full')
+  expect(plan.plan.vitestVersion).toBe('5.0.5, 5.0.99')
+  const file = resolve(root, 'packages/b/node_modules/vitest/package.json')
+  await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), version: '4.1.0' }))
+  const refused = await invoke(root, ['plan'])
+  expect(refused.code).toBe(2)
+  expect(refused.output).toContain('Unsupported Vitest 4.1.0. vitest-impact needs Vitest 5.')
 })

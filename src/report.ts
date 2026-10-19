@@ -28,7 +28,7 @@ export function analyzeRun(plan: Plan, mode: RunReport['mode'], executed: FileRe
     return withPhases.length ? withPhases.reduce<Phases>((s, t) => ({ importMs: s.importMs + t.phases!.importMs, environmentMs: s.environmentMs + t.phases!.environmentMs, setupMs: s.setupMs + t.phases!.setupMs, testsMs: s.testsMs + t.phases!.testsMs }), { importMs: 0, environmentMs: 0, setupMs: 0, testsMs: 0 }) : null
   }
   return {
-    schemaVersion: 1, mode, plan, executed, packages: (packages ?? []).map(p => p.mode === 'shared' ? { ...p, phases: sums(p.name) } : p),
+    schemaVersion: 1, mode, plan, sharedGroups: plan.sharedGroups, executed, packages: (packages ?? []).map(p => p.mode === 'shared' ? { ...p, phases: sums(p.name) } : p),
     slowestFiles: [...executed].sort((a, b) => b.durationMs - a.durationMs).slice(0, 10).map(t => ({ file: t.file, durationMs: t.durationMs })),
     timeouts: executed.flatMap(t => t.timedOut.map(test => ({ file: t.file, test }))), load: load ?? null, unhandledErrors, executionMs, runLevelFailure,
     missingFiles, unexpectedFiles, missedFailingFiles: misses.map(t => t.file), validation,
@@ -64,6 +64,7 @@ export function markdownSummary(report: RunReport): string {
     `| Shadow validation | ${report.validation} |\n` +
     `| Exit code | ${report.exitCode} |\n` +
     `| Observed failing-file recall | ${report.observedFailureRecall === null ? 'Not measured' : `${(report.observedFailureRecall * 100).toFixed(1)}%`} |\n\n` +
+    (report.plan.packages?.length ? `Shared processes: ${report.sharedGroups.length} (one per Vitest copy)\n\n` : '') +
     (report.plan.fallbackReasons.length ? `Full-run reasons:\n\n${report.plan.fallbackReasons.map(r => `- ${safe(r)}`).join('\n')}\n\n` : '') +
     (report.plan.separate.length ? `Packages in their own process:\n\n${report.plan.separate.map(s => `- ${safe(s.package)}: ${safe(s.reason)}`).join('\n')}\n\n` : '') +
     (units.length ? `Units that failed or produced no report:\n\n${units.map(u => `- ${safe(u.name)} (${u.mode}): exit code ${u.exitCode}${u.noReport ? ', no report' : ''}`).join('\n')}\n\n` : '') +

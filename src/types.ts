@@ -62,6 +62,8 @@ export interface Plan {
   coveragePackages: string[]
   /** Vitest packages with no test files whose config sets passWithNoTests; left out of the run. */
   emptyPackages: string[]
+  /** One shared Vitest process for each Vitest copy that shared packages resolve (empty without a workspace). */
+  sharedGroups: SharedGroup[]
   /** The `--shard i/n` this invocation runs, or null. */
   shard: { index: number; count: number } | null
   resources: ResourceBudget
@@ -86,10 +88,13 @@ export interface FileResult {
 export interface Phases { importMs: number; environmentMs: number; setupMs: number; testsMs: number }
 export interface LoadSummary { peakPerCpu: number; meanPerCpu: number; samples: number }
 export interface PackageResult { name: string; mode: 'shared' | 'separate' | 'script'; exitCode: number | null; durationMs: number; phases: Phases | null }
+/** The shared packages that resolve one Vitest copy: `vitest` is the copy's folder relative to the root. */
+export interface SharedGroup { vitest: string; packages: string[] }
 export interface RunReport {
   schemaVersion: 1
   mode: 'shadow' | 'selected' | 'full'
   plan: Plan
+  sharedGroups: SharedGroup[]
   executed: FileResult[]
   packages: PackageResult[]
   unhandledErrors: string[]

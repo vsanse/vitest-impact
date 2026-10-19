@@ -63,10 +63,10 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
       : options.vitestConfig ? { vitestConfig: options.vitestConfig } : {})
   try {
     const forced: string[] = []
-    if (adapter?.versionWarning) forced.push(adapter.versionWarning)
+    forced.push(...adapter?.versionWarnings ?? [])
     if (options.mode === 'full') forced.push('explicit-full-run')
     if (!loaded.found) forced.push('no-impact-config: configure input ownership before selecting tests')
-    if (adapter?.context.config.coverage.enabled) forced.push('coverage-enabled: preserve complete-suite coverage')
+    if (adapter?.coverageEnabled()) forced.push('coverage-enabled: preserve complete-suite coverage')
     if (workspace && adapter) {
       const testFiles = new Set(adapter.tests().map(t => t.file))
       const sources = git.changes.map(c => c.path).filter(path => !testFiles.has(path) && matches(path, loaded.config.sourcePatterns))
@@ -93,7 +93,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
       configurationHash: loaded.hash, workspaceFingerprint: fingerprint, ...selection,
       packages: packages?.map(p => p.name) ?? [], separate,
       scripts: packages?.filter(p => p.kind === 'script').map(p => p.name) ?? [], coveragePackages: [...coveragePackages].sort(),
-      emptyPackages: adapter?.emptyPackages ?? [], shard, resources,
+      emptyPackages: adapter?.emptyPackages ?? [], sharedGroups: adapter?.sharedGroups ?? [], shard, resources,
       planningMs: performance.now() - start,
       warnings: [
         'Selection assumes sourcePatterns use statically resolvable dependencies; declare other inputs or force a full run.',
@@ -128,11 +128,10 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
       let runLevelFailure = false
       // The shared run covers the packages that are not separate (run() skips the separate ones). With none left it is skipped.
       if (adapter && !emptyShard) {
+        // Each group closes when its run ends: global teardown can set Vitest's failure status.
         const result = await adapter.run(ids)
-        files.push(...adapter.results(result))
+        files.push(...result.files)
         unhandled.push(...result.unhandledErrors.map(error => error instanceof Error ? error.message : String(error)))
-        // Global teardown can set Vitest's failure status. Finish it before publishing results.
-        await adapter.close()
         runLevelFailure = Number(process.exitCode ?? 0) !== 0
         for (const name of new Set(files.map(f => f.project))) {
           results.push({ name, mode: 'shared', exitCode: null, durationMs: files.filter(f => f.project === name).reduce((sum, f) => sum + f.durationMs, 0), phases: null })

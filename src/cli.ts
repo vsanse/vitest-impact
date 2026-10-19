@@ -33,7 +33,7 @@ Options:
 
 Artifacts: .vitest-impact/{plan.json,report.json,summary.md}
 Exit codes: 0 passed, 1 test failures, 2 configuration/infrastructure/incomplete run.
-A workspace runs its Vitest packages in one process. Shadow mode runs ALL tests.
+A workspace runs its Vitest packages in one process per Vitest copy. Shadow mode runs ALL tests.
 `
 
 async function main(): Promise<void> {
