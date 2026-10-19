@@ -118,7 +118,8 @@ const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies'
 /**
  * Design 6.2.3, "run the full set when not sure": a change in package X can reach a package that depends on X
  * through X's built output (dist/), which the import graph does not link to X's sources. 0.2.0 does not track
- * those links, so each changed source path inside X, with X listed by a package in the run set, forces full.
+ * those links, so a changed source path inside X forces full when a package in the run set depends on X,
+ * directly or through other discovered packages (with or without tests).
  */
 export async function untrackedDependents(root: string, all: WorkspacePackage[], runSet: WorkspacePackage[], changedSources: string[]): Promise<string[]> {
   const changed = new Set<string>()
@@ -127,10 +128,19 @@ export async function untrackedDependents(root: string, all: WorkspacePackage[],
     if (owner) changed.add(owner.name)
   }
   if (!changed.size) return []
-  const listed = new Set<string>()
-  for (const p of runSet) {
+  // Package name -> the discovered packages that list it.
+  const dependents = new Map<string, string[]>()
+  for (const p of all) {
     const json = await readJson(resolve(root, p.dir, 'package.json'), `${p.dir}/package.json`)
-    for (const field of DEPENDENCY_FIELDS) for (const name of Object.keys((json?.[field] ?? {}) as object)) listed.add(name)
+    for (const field of DEPENDENCY_FIELDS) for (const name of Object.keys((json?.[field] ?? {}) as object)) dependents.set(name, [...dependents.get(name) ?? [], p.name])
   }
-  return [...changed].filter(name => listed.has(name)).sort().map(name => `workspace-dependents-not-tracked: ${name}`)
+  const inRun = new Set(runSet.map(p => p.name))
+  const reachesRun = (name: string) => {
+    const seen = new Set<string>()
+    const queue = [name]
+    while (queue.length) for (const d of dependents.get(queue.pop()!) ?? []) if (!seen.has(d)) { seen.add(d); queue.push(d) }
+    seen.delete(name)
+    return [...seen].some(d => inRun.has(d))
+  }
+  return [...changed].filter(reachesRun).sort().map(name => `workspace-dependents-not-tracked: ${name}`)
 }

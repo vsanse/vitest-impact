@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, symlink, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, symlink, rm, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -77,6 +77,20 @@ export async function makeWorkspaceFixture(options = {}) {
     })
   }
   return makeRepo('vitest-impact-ws-', { ...files, ...options.packages })
+}
+// Replaces the node_modules link with a real folder, as a package manager makes it: links to this checkout's
+// dependencies plus `links` (package name -> folder). Commits the change, so the returned base holds it.
+export async function linkPackages(root, links) {
+  await rm(resolve(root, 'node_modules'))
+  await mkdir(resolve(root, 'node_modules'))
+  for (const entry of await readdir(resolve(projectRoot, 'node_modules'))) if (!entry.startsWith('.')) await symlink(resolve(projectRoot, 'node_modules', entry), resolve(root, 'node_modules', entry))
+  for (const [name, dir] of Object.entries(links)) {
+    await mkdir(dirname(resolve(root, 'node_modules', name)), { recursive: true })
+    await symlink(resolve(root, dir), resolve(root, 'node_modules', name))
+  }
+  await git(root, 'add', '-A')
+  await git(root, '-c', 'user.name=Vitest Impact Tests', '-c', 'user.email=tests@example.invalid', 'commit', '-qm', 'real node_modules')
+  return git(root, 'rev-parse', 'HEAD')
 }
 
 // `extraEnv` adds variables; a key set to undefined is removed.

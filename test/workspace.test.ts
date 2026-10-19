@@ -3,7 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { put } from '../scripts/fixture.mjs'
-import { discoverPackages, filterPackages } from '../src/workspace.js'
+import { discoverPackages, filterPackages, untrackedDependents } from '../src/workspace.js'
+import type { WorkspacePackage } from '../src/types.js'
 
 const roots: string[] = []
 const make = async () => {
@@ -93,5 +94,18 @@ describe('workspace', () => {
     await put(root, 'package.json', JSON.stringify({ workspaces: ['packages/*'] }))
     await put(root, 'packages/a/package.json', '{ not json')
     await expect(discoverPackages(root)).rejects.toThrow('Invalid package.json: packages/a/package.json')
+  })
+
+  test('untrackedDependents walks dependents transitively through every package, and ends at a cycle', async () => {
+    const root = await make()
+    // a -> c -> b, and d <-> e.
+    const deps: Record<string, string[]> = { a: ['@x/c'], b: [], c: ['@x/b'], d: ['@x/e'], e: ['@x/d'] }
+    await Promise.all(Object.entries(deps).map(([n, list]) => pkg(root, `packages/${n}`, { name: `@x/${n}`, devDependencies: Object.fromEntries(list.map(d => [d, '*'])) })))
+    const all: WorkspacePackage[] = Object.keys(deps).map(n => ({ name: `@x/${n}`, dir: `packages/${n}`, kind: 'vitest', vitestConfig: null, testScript: null }))
+    const only = (name: string) => all.filter(p => p.name === name)
+    expect(await untrackedDependents(root, all, only('@x/a'), ['packages/b/src/x.ts'])).toEqual(['workspace-dependents-not-tracked: @x/b'])
+    // The changed package itself is not its own dependent, also when a cycle leads back to it.
+    expect(await untrackedDependents(root, all, only('@x/d'), ['packages/d/src/x.ts'])).toEqual([])
+    expect(await untrackedDependents(root, all, only('@x/e'), ['packages/d/src/x.ts'])).toEqual(['workspace-dependents-not-tracked: @x/d'])
   })
 })

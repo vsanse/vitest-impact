@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'vitest'
 import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
-import { makeFixture, makeWorkspaceFixture, put, invoke, git, projectRoot } from '../scripts/fixture.mjs'
+import { makeFixture, makeWorkspaceFixture, put, invoke, linkPackages, projectRoot } from '../scripts/fixture.mjs'
 
 const cleanups: (() => Promise<void>)[] = []
 async function workspaceFixture(options: { packages?: Record<string, string>; config?: object } = {}) {
@@ -462,15 +462,7 @@ test('a source change in a package another package depends on runs the full set'
     'packages/a/package.json': JSON.stringify({ name: '@w/a', type: 'module', dependencies: { '@w/b': '*' }, scripts: { test: 'vitest run' } }),
     'packages/a/test/uses-b.test.ts': "import { test, expect } from 'vitest'; import { name } from '@w/b'; test('a sees b', () => expect(name).toBe('b'))\n",
   } })
-  // A real node_modules folder (not the shared symlink), so @w/b can be linked as a package manager would.
-  await rm(resolve(root, 'node_modules'))
-  await mkdir(resolve(root, 'node_modules/@w'), { recursive: true })
-  for (const entry of await readdir(resolve(projectRoot, 'node_modules'))) if (!entry.startsWith('.')) await symlink(resolve(projectRoot, 'node_modules', entry), resolve(root, 'node_modules', entry))
-  await symlink(resolve(root, 'packages/b'), resolve(root, 'node_modules/@w/b'))
-  // The baseline committed the node_modules symlink; commit its removal so the base diff holds only b's change.
-  await git(root, 'add', '-A')
-  await git(root, '-c', 'user.name=Tests', '-c', 'user.email=tests@example.invalid', 'commit', '-qm', 'real node_modules')
-  const base = await git(root, 'rev-parse', 'HEAD')
+  const base = await linkPackages(root, { '@w/b': 'packages/b' })
   await put(root, 'packages/b/src/index.ts', "export const name = 'B'\n")
   await put(root, 'packages/b/test/unit.test.ts', "import { test, expect } from 'vitest'; import { name } from '../src/index'; test('name', () => expect(name).toBe('B'))\n")
   await put(root, 'packages/b/dist/index.js', "export const name = 'B'\n")
@@ -609,4 +601,26 @@ test('the Git checks ignore the state folder, also when .gitignore does not list
   expect(selected.code, selected.output).toBe(0)
   expect(selected.plan.fallbackReasons.filter((r: string) => r.includes('.vitest-impact/'))).toEqual([])
   expect(selected.report.executed.map(t => t.file)).toEqual(['packages/a/test/unit.test.ts'])
+})
+
+test('a source change reaches the dependents of its dependents: the full set runs', async () => {
+  // @w/a depends on @w/c (no test script), which depends on @w/b, all through dist/. @w/a does not list @w/b.
+  const { root } = await workspaceFixture({ packages: {
+    '.gitignore': 'node_modules/\n.vitest/\n.vitest-impact/\ndist/\n',
+    'packages/b/package.json': JSON.stringify({ name: '@w/b', type: 'module', main: 'dist/index.js', scripts: { test: 'vitest run' } }),
+    'packages/b/dist/index.js': "export const name = 'b'\n",
+    'packages/c/package.json': JSON.stringify({ name: '@w/c', type: 'module', main: 'dist/index.js', dependencies: { '@w/b': '*' } }),
+    'packages/c/dist/index.js': "export { name } from '@w/b'\n",
+    'packages/a/package.json': JSON.stringify({ name: '@w/a', type: 'module', dependencies: { '@w/c': '*' }, scripts: { test: 'vitest run' } }),
+    'packages/a/test/uses-c.test.ts': "import { test, expect } from 'vitest'; import { name } from '@w/c'; test('a sees b through c', () => expect(name).toBe('b'))\n",
+  } })
+  const base = await linkPackages(root, { '@w/b': 'packages/b', '@w/c': 'packages/c' })
+  await put(root, 'packages/b/src/index.ts', "export const name = 'B'\n")
+  await put(root, 'packages/b/test/unit.test.ts', "import { test, expect } from 'vitest'; import { name } from '../src/index'; test('name', () => expect(name).toBe('B'))\n")
+  await put(root, 'packages/b/dist/index.js', "export const name = 'B'\n")
+  const run = await invoke(root, ['run', '--mode', 'selected', '--base', base])
+  expect(run.plan.fallbackReasons).toContain('workspace-dependents-not-tracked: @w/b')
+  expect(run.plan.mode).toBe('full')
+  expect(run.code, run.output).toBe(1)
+  expect(run.report.executed.find(t => t.file === 'packages/a/test/uses-c.test.ts')?.state).toBe('failed')
 })
