@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, realpathSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -76,6 +77,9 @@ export class VitestAdapter {
     process.env.NODE_ENV ??= 'test'
     // Warm caches live in the state folder so one CI cache step carries them between runs.
     const cache = resolve(root, '.vitest-impact', 'cache')
+    // The shim sits inside the repo: a client environment (jsdom, for example) cannot load it from a tool folder outside the repo.
+    const shim = resolve(root, '.vitest-impact', 'cwd-shim.mjs')
+    if (packages) await writeFile(shim, readFileSync(CWD_SHIM, 'utf8').replace(/^\/\/# sourceMappingURL=.*$/m, ''))
     const realRoot = realpathSync(root)
     const found: Found = { owners: new Map(), reasons: new Map(), passWithNoTests: new Set(), coverage: new Set(), limits: new Map() }
     const groups: Group[] = []
@@ -84,7 +88,7 @@ export class VitestAdapter {
         const vitest = localPath(realRoot, copy)
         // Each group keeps its own Vite cache, which holds Vitest's results.json; the module cache is shared.
         const cacheDir = packages ? resolve(cache, 'vite', createHash('sha256').update(vitest).digest('hex').slice(0, 12)) : resolve(cache, 'vite')
-        const { context, specs } = await VitestAdapter.openGroup(root, budget, copy, cacheDir, packages ? members : undefined, options, found)
+        const { context, specs } = await VitestAdapter.openGroup(root, budget, copy, cacheDir, shim, packages ? members : undefined, options, found)
         groups.push({ context, specs, vitest, members })
       }
       const specs = groups.flatMap(g => g.specs)
@@ -102,7 +106,7 @@ export class VitestAdapter {
     }
   }
 
-  private static async openGroup(root: string, budget: ResourceBudget, copy: string, cacheDir: string, packages: WorkspacePackage[] | undefined,
+  private static async openGroup(root: string, budget: ResourceBudget, copy: string, cacheDir: string, shim: string, packages: WorkspacePackage[] | undefined,
     options: { vitestConfig?: string; isolated?: string[] }, found: Found): Promise<{ context: Vitest; specs: TestSpecification[] }> {
     const require = createRequire(resolve(copy, 'package.json'))
     const { createVitest } = await import(pathToFileURL(require.resolve('vitest/node')).href) as typeof import('vitest/node')
@@ -186,7 +190,7 @@ export class VitestAdapter {
           project.config.allowOnly = false
           // The package's own `env` wins over what its package manager would set, as in its own run.
           project.config.env = { ...packageEnv(root, owner.dir), ...project.config.env, VITEST_IMPACT_CWD: resolve(root, owner.dir) }
-          project.config.setupFiles = [CWD_SHIM, ...project.config.setupFiles]
+          project.config.setupFiles = [shim, ...project.config.setupFiles]
         }
         // Vitest runs one sequence.groupOrder at a time and needs one maxWorkers value per group:
         // give each (groupOrder, maxWorkers) pair its own group, keeping the configured order.

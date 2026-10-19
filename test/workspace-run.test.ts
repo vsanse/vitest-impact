@@ -582,3 +582,18 @@ test('the version policy applies to every Vitest copy', async () => {
   expect(refused.code).toBe(2)
   expect(refused.output).toContain('Unsupported Vitest 4.1.0. vitest-impact needs Vitest 5.')
 })
+
+test('the working-folder shim loads in a package whose environment transforms modules for the client', async () => {
+  // The CLI runs from this checkout's dist/, outside the fixture repo, as when the tool is installed outside the repo root.
+  const { root } = await workspaceFixture({ packages: {
+    'packages/b/vitest.config.ts': config("environment: './client-env.ts'"),
+    'packages/b/client-env.ts': "export default { name: 'client-env', viteEnvironment: 'client', setup: () => ({ teardown() {} }) }\n",
+  } })
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code, run.output).toBe(0)
+  // cwd.test.ts asserts that process.cwd() is the package folder.
+  expect(run.report.executed.filter(t => t.project === '@w/b').map(t => [t.file, t.state]).sort()).toEqual([
+    ['packages/b/test/cwd.test.ts', 'passed'], ['packages/b/test/same.test.ts', 'passed'], ['packages/b/test/unit.test.ts', 'passed'],
+  ])
+  expect(await readFile(resolve(root, '.vitest-impact/cwd-shim.mjs'), 'utf8')).toContain('process.chdir(folder)')
+})
