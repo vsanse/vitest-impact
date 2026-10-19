@@ -9,6 +9,8 @@ import type { Change, GitChanges } from './types.js'
 const exec = promisify(execFile)
 export const posix = (path: string): string => path.split(sep).join('/')
 export const localPath = (root: string, file: string): string => posix(relative(root, file))
+/** The tool writes its state here while it plans and runs. The Git checks skip it, whatever .gitignore says. */
+const stateFolder = (path: string): boolean => path === '.vitest-impact' || path.startsWith('.vitest-impact/')
 
 async function git(root: string, args: string[]): Promise<string> {
   return (await exec('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 30_000 })).stdout
@@ -40,8 +42,8 @@ export async function changedFiles(root: string, baseRef?: string): Promise<GitC
       git(root, ['diff', '--name-status', '-z', '--no-renames', base, '--']),
       git(root, ['ls-files', '--others', '--exclude-standard', '-z']),
     ])
-    const changes = new Map(parseNameStatus(diff).map(c => [c.path, c]))
-    for (const path of untracked.split('\0').filter(Boolean)) changes.set(path, { path, status: 'A' })
+    const changes = new Map(parseNameStatus(diff).filter(c => !stateFolder(c.path)).map(c => [c.path, c]))
+    for (const path of untracked.split('\0').filter(path => path && !stateFolder(path))) changes.set(path, { path, status: 'A' })
     return { head, base, changes: [...changes.values()].sort((a, b) => a.path.localeCompare(b.path)), fallback: null }
   }
   catch (error) {
@@ -55,7 +57,7 @@ export async function workspaceFingerprint(root: string, extraFiles: string[] = 
   let paths: string[]
   try {
     const files = await git(root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z'])
-    paths = [...new Set([...files.split('\0').filter(Boolean), ...extraFiles.map(p => localPath(root, p))])].sort()
+    paths = [...new Set([...files.split('\0').filter(path => path && !stateFolder(path)), ...extraFiles.map(p => localPath(root, p))])].sort()
   } catch { return null }
   const h = createHash('sha256')
   h.update(await git(root, ['rev-parse', '--verify', 'HEAD']))

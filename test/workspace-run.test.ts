@@ -597,3 +597,16 @@ test('the working-folder shim loads in a package whose environment transforms mo
   ])
   expect(await readFile(resolve(root, '.vitest-impact/cwd-shim.mjs'), 'utf8')).toContain('process.chdir(folder)')
 })
+
+test('the Git checks ignore the state folder, also when .gitignore does not list it', async () => {
+  const { root, base } = await workspaceFixture({ packages: { '.gitignore': 'node_modules/\n.vitest/\n' } })
+  const first = await invoke(root, ['run', '--mode', 'full'])
+  expect(first.code, first.output).toBe(0)
+  const second = await invoke(root, ['run', '--mode', 'full'])
+  expect(second.code, second.output).toBe(0)
+  await put(root, 'packages/a/src/index.ts', "export const name = 'a' as string\n")
+  const selected = await invoke(root, ['run', '--mode', 'selected', '--base', base])
+  expect(selected.code, selected.output).toBe(0)
+  expect(selected.plan.fallbackReasons.filter((r: string) => r.includes('.vitest-impact/'))).toEqual([])
+  expect(selected.report.executed.map(t => t.file)).toEqual(['packages/a/test/unit.test.ts'])
+})
