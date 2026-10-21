@@ -436,6 +436,19 @@ test.runIf(major === 4)('on Vitest 4 a package that turns the module cache on ru
   expect(existsSync(resolve(root, 'node_modules/.experimental-vitest-cache'))).toBe(true)
 })
 
+// vite-plugin-wasm finds Vitest by a plugin named "vitest": a root `vitest run` has one on Vitest 4, none on Vitest 5.
+test('a package sees the plugins, project name and tags of its own vitest run', async () => {
+  const detect = "{ name: 'detect', configResolved(c) { found = c.plugins.some(p => p.name === 'vitest') }, resolveId: id => id === 'virtual:detect' ? '\\0detect' : undefined, load: id => id === '\\0detect' ? `export default ${found}` : undefined }"
+  const { root } = await workspaceFixture({ packages: {
+    'packages/b/vitest.config.ts': `import { defineConfig } from 'vitest/config'; let found = false\nexport default defineConfig({ plugins: [${detect}], test: { include: ['test/**/*.test.ts'], tags: [{ name: 'slow' }] } })\n`,
+    'packages/b/test/detect.test.ts': "import { test, expect } from 'vitest'; import found from 'virtual:detect'\n" +
+      `test('as in its own run', { tags: ['slow'] }, ({ task }) => {\n  expect(found).toBe(${major === 4})\n  expect(task.file.projectName).toBe('@w/b')\n})\n`,
+  } })
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.report.executed.find(t => t.file === 'packages/b/test/detect.test.ts')?.state).toBe('passed')
+})
+
 test('shared, separate and script units see the environment they get without the tool', async () => {
   const nodeEnv = "import { test, expect } from 'vitest'; test('node env', () => expect(process.env.NODE_ENV).toBe('test'))\n"
   const flagged = (x: string) => `import { defineConfig } from 'vitest/config'; export default defineConfig({ define: { __CONFIG_VITEST__: JSON.stringify(process.env.VITEST ?? 'unset') }, test: { include: ['test/**/*.test.ts'], ${x} } })\n`

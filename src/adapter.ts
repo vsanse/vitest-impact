@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { TestProject, TestSpecification, Vitest, TestRunResult } from 'vitest/node'
 import type { ViteUserConfig } from 'vitest/config'
@@ -32,6 +32,33 @@ function separateReason(project: TestProject, own: OwnTestConfig, major: number)
   // Vitest 5: the root cache setting governs the shared run, so a package that turned its module cache off keeps that in its own run.
   if (major === 5 && own.fsModuleCache === false) return 'fs-module-cache-off'
   return null
+}
+
+/**
+ * The project entry for a package's config file. On Vitest 4 a root `vitest run` has a plugin named "vitest" and a
+ * project does not; plugins such as vite-plugin-wasm look for that name. So a Vitest 4 package is an inline project
+ * that extends its file and adds one, keeping the name and tags Vitest gives a file project.
+ */
+function projectEntry(file: string, major: number) {
+  if (major !== 4) return file
+  let tags: unknown
+  const plugin = {
+    name: 'vitest',
+    config(config: { test?: { name?: string | { label?: string }; tags?: unknown } }) {
+      const test = config.test ??= {}
+      // An inline project is named after its index; a file project after the name in its package.json, else its folder.
+      if (!(typeof test.name === 'string' ? test.name : test.name?.label)) {
+        const pkg = resolve(dirname(file), 'package.json')
+        let label = existsSync(pkg) ? JSON.parse(readFileSync(pkg, 'utf8')).name : ''
+        if (typeof label !== 'string' || !label) label = basename(dirname(file))
+        test.name = typeof test.name === 'object' ? { ...test.name, label } : label
+      }
+      tags = test.tags
+    },
+    // Vitest 4.1 sets an inline project's tags to the inline ones, after this plugin's config hook.
+    configResolved(config: { test?: { tags?: unknown } }) { config.test!.tags = tags },
+  }
+  return { extends: file, root: dirname(file), plugins: [plugin] }
 }
 
 /** One Vitest instance: the packages that resolve one physical Vitest copy (or the single project). */
@@ -125,7 +152,7 @@ export class VitestAdapter {
     // Vitest 4's module cache is experimental and off by default: the tool leaves it to the package.
     const overrides: ViteUserConfig = {
       cacheDir,
-      test: { ...(major === 5 ? { fsModuleCachePath: resolve(root, '.vitest-impact', 'cache', 'modules') } : {}), ...(packages ? { projects: packages.map(p => resolve(root, p.vitestConfig!)) } : {}) },
+      test: { ...(major === 5 ? { fsModuleCachePath: resolve(root, '.vitest-impact', 'cache', 'modules') } : {}), ...(packages ? { projects: packages.map(p => projectEntry(resolve(root, p.vitestConfig!), major)) } : {}) },
     }
     // Vitest 4 has only this form; Vitest 5 accepts it and ignores the mode.
     const context = await createVitest('test', {

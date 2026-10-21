@@ -153,6 +153,15 @@ manager, which sets them itself.
   For a Vitest 4 copy the tool passes no cache path, to the shared run or to separate units, and never turns
   the cache on. `fs-module-cache-off` applies to Vitest 5 only. A package that turns the cache on keeps it on
   in the shared process (a project's own `experimental.fsModuleCache` wins over the root's).
+- Plugin names: a root `vitest run` on Vitest 4 has a plugin named `vitest`, and a project has only
+  `vitest:project` (Vitest 5 has no plugin named `vitest` in either). Plugins such as vite-plugin-wasm look for
+  that name: without it, vite-plugin-wasm loads a `.wasm` file by a `/@fs/` URL that fails in Node. Measured on
+  the 44-package monorepo: 48 files that pass with plain `vitest run` failed in the shared process. So a
+  Vitest 4 package is an inline project that extends its config file (root: the file's folder) and adds a
+  plugin named `vitest`. That plugin also keeps what Vitest gives a file project and not an inline one: the
+  name (from the folder's `package.json`, else the folder name; an inline project is named after its index)
+  and the config's `test.tags` (Vitest 4.1 sets an inline project's tags to the inline ones). The module cache
+  is unchanged: Vitest 4.1 only leaves its own inline plugin out of the cache key.
 - There is no `providedOptions`: Vitest 4 leaves `maxWorkers` unset unless a config sets it, so a set value
   is the package's own limit.
 - A global teardown that throws: Vitest 4.1 only logs it (its own `vitest run` exits 0), and Vitest 4.0 rejects
