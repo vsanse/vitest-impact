@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from 'vitest'
 import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
-import { makeFixture, makeWorkspaceFixture, put, invoke, linkPackages, fixtureModules, fixtureVitest } from '../scripts/fixture.mjs'
+import { makeFixture, makeWorkspaceFixture, put, invoke, linkPackages, projectRoot, fixtureModules, fixtureVitest } from '../scripts/fixture.mjs'
 
 const cleanups: (() => Promise<void>)[] = []
 async function workspaceFixture(options: { packages?: Record<string, string>; config?: object } = {}) {
@@ -11,6 +11,7 @@ async function workspaceFixture(options: { packages?: Record<string, string>; co
   return value
 }
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup() })
+const major = parseInt(fixtureVitest)
 
 const config = (test: string) => `import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { include: ['test/**/*.test.ts'], ${test} } })\n`
 
@@ -224,9 +225,10 @@ test('a coverage package that is also separate for another reason still runs in 
   expect(b.every(t => t.selected && t.reasons.includes('coverage: package runs in full'))).toBe(true)
 })
 
-test('a separate package keeps its own lower worker limit', async () => {
-  const slow = (name: string) => `import { test } from 'vitest'; import { appendFileSync } from 'node:fs'
+const slow = (name: string) => `import { test } from 'vitest'; import { appendFileSync } from 'node:fs'
 test('${name}', async () => { appendFileSync('log.txt', 's\\n'); await new Promise(r => setTimeout(r, 700)); appendFileSync('log.txt', 'e\\n') })\n`
+
+test('a separate package keeps its own lower worker limit', async () => {
   const { root } = await workspaceFixture({ packages: {
     'packages/b/vitest.config.ts': config("pool: 'threads', maxWorkers: 1"),
     'packages/b/test/slow1.test.ts': slow('one'),
@@ -237,6 +239,23 @@ test('${name}', async () => { appendFileSync('log.txt', 's\\n'); await new Promi
   expect(run.report.executed.filter(t => t.project === '@w/b')).toHaveLength(5)
   // One worker: the two slow files never overlap (s e s e). With the budget's 2 workers it would be s s e e.
   expect(await readFile(resolve(root, 'packages/b/log.txt'), 'utf8')).toBe('s\ne\ns\ne\n')
+})
+
+test('a separate package that sets no worker limit gets the budget', async () => {
+  const { root } = await workspaceFixture({ packages: {
+    'packages/b/vitest.config.ts': config("pool: 'threads'"),
+    ...Object.fromEntries(['one', 'two', 'three'].map(name => [`packages/b/test/${name}.test.ts`, slow(name)])),
+  } })
+  const run = await invoke(root, ['run', '--mode', 'full'], 60_000)
+  expect(run.code, run.output).toBe(0)
+  // The budget's 2 workers run two slow files at once, never three.
+  let running = 0
+  let peak = 0
+  for (const mark of (await readFile(resolve(root, 'packages/b/log.txt'), 'utf8')).split('\n')) {
+    if (mark === 's') peak = Math.max(peak, ++running)
+    if (mark === 'e') running--
+  }
+  expect(peak).toBe(2)
 })
 
 test('a separate process that exits before writing its report leaves no stale result behind', async () => {
@@ -376,7 +395,7 @@ test('check --write merges into an existing isolated list, sorted', async () => 
   expect(config.isolated).toEqual(['@w/b', '@w/z'])
 })
 
-test('runs keep their module cache in .vitest-impact/cache across invocations', async () => {
+test.runIf(major === 5)('runs keep their module cache in .vitest-impact/cache across invocations', async () => {
   const { root } = await workspaceFixture()
   expect((await invoke(root, ['run', '--mode', 'full'])).code).toBe(0)
   expect((await readdir(resolve(root, '.vitest-impact/cache/modules'))).length).toBeGreaterThan(0)
@@ -384,13 +403,36 @@ test('runs keep their module cache in .vitest-impact/cache across invocations', 
   expect((await invoke(root, ['run', '--mode', 'full'])).code).toBe(0)
 })
 
-test('a package with fsModuleCache: false is planned separate and the shared cache still fills', async () => {
+test.runIf(major === 5)('a package with fsModuleCache: false is planned separate and the shared cache still fills', async () => {
   const { root } = await workspaceFixture({ packages: { 'packages/b/vitest.config.ts': config('fsModuleCache: false') } })
   const plan = await invoke(root, ['plan'])
   expect(plan.plan.separate).toEqual([{ package: '@w/b', reason: 'fs-module-cache-off' }])
   const run = await invoke(root, ['run', '--mode', 'full'])
   expect(run.code, run.output).toBe(0)
   expect((await readdir(resolve(root, '.vitest-impact/cache/modules'))).filter(f => /^[0-9a-f]{40}$/.test(f)).length).toBeGreaterThan(0)
+})
+
+// Vitest 4 keeps its experimental module cache in node_modules/.experimental-vitest-cache: a real folder here, not the shared link.
+test.runIf(major === 4)('on Vitest 4 the module cache stays off', async () => {
+  const { root } = await workspaceFixture()
+  await linkPackages(root, {})
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code, run.output).toBe(0)
+  expect(existsSync(resolve(root, 'node_modules/.experimental-vitest-cache'))).toBe(false)
+  expect(existsSync(resolve(root, '.vitest-impact/cache/modules'))).toBe(false)
+})
+
+test.runIf(major === 4)('on Vitest 4 a package that turns the module cache on runs in the shared process', async () => {
+  const { root } = await workspaceFixture({ packages: { 'packages/b/vitest.config.ts': config('experimental: { fsModuleCache: true }') } })
+  await linkPackages(root, {})
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.plan.separate).toEqual([])
+  expect(run.report.executed.map(t => [t.file, t.state]).sort()).toEqual([
+    ['packages/a/test/cwd.test.ts', 'passed'], ['packages/a/test/same.test.ts', 'passed'], ['packages/a/test/unit.test.ts', 'passed'],
+    ['packages/b/test/cwd.test.ts', 'passed'], ['packages/b/test/same.test.ts', 'passed'], ['packages/b/test/unit.test.ts', 'passed'],
+  ])
+  expect(existsSync(resolve(root, 'node_modules/.experimental-vitest-cache'))).toBe(true)
 })
 
 test('shared, separate and script units see the environment they get without the tool', async () => {
@@ -543,6 +585,21 @@ test('each package runs on the Vitest copy it resolves, one shared process per c
   expect(failing.report.executed.filter(t => t.state !== 'passed').map(t => t.file)).toEqual(['packages/b/test/fail.test.ts'])
 })
 
+test.runIf(major === 4)('packages on a Vitest 4 copy and a Vitest 5 copy run in one invocation, each on its own copy', async () => {
+  const { root } = await workspaceFixture({ packages: { 'packages/a/test/copy.test.ts': sameCopy, 'packages/b/test/copy.test.ts': sameCopy } })
+  // @w/b resolves this checkout's Vitest 5, linked as pnpm links a package.
+  await mkdir(resolve(root, 'packages/b/node_modules'))
+  await symlink(resolve(projectRoot, 'node_modules/vitest'), resolve(root, 'packages/b/node_modules/vitest'))
+  const run = await invoke(root, ['run', '--mode', 'full'], 60_000)
+  expect(run.code, run.output).toBe(0)
+  expect(run.plan.vitestVersion).toBe(`${fixtureVitest}, 5.0.5`)
+  expect(run.report.executed.filter(t => t.file.endsWith('/copy.test.ts')).map(t => [t.file, t.state]).sort()).toEqual([
+    ['packages/a/test/copy.test.ts', 'passed'], ['packages/b/test/copy.test.ts', 'passed'],
+  ])
+  const copy = (modules: string) => relative(realpathSync(root), realpathSync(resolve(modules, 'vitest')))
+  expect(run.report.sharedGroups).toEqual([{ vitest: copy(fixtureModules), packages: ['@w/a'] }, { vitest: copy(resolve(projectRoot, 'node_modules')), packages: ['@w/b'] }])
+})
+
 test('a project name used by packages of two Vitest copies is refused, as Vitest refuses it within one', async () => {
   const named = config("name: 'unit'")
   const { root } = await workspaceFixture({ packages: { 'packages/a/vitest.config.ts': named, 'packages/b/vitest.config.ts': named } })
@@ -583,10 +640,10 @@ test('the version policy applies to every Vitest copy', async () => {
   expect(plan.plan.mode).toBe('full')
   expect(plan.plan.vitestVersion).toBe(`${fixtureVitest}, ${untested}`)
   const file = resolve(root, 'packages/b/node_modules/vitest/package.json')
-  await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), version: '4.1.0' }))
+  await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), version: '4.0.17' }))
   const refused = await invoke(root, ['plan'])
   expect(refused.code).toBe(2)
-  expect(refused.output).toContain('Unsupported Vitest 4.1.0. vitest-impact needs Vitest 5.')
+  expect(refused.output).toContain('Unsupported Vitest 4.0.17. vitest-impact needs Vitest 4.0.18 or later, or Vitest 5.')
 })
 
 test('the working-folder shim loads in a package whose environment transforms modules for the client', async () => {

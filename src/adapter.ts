@@ -14,11 +14,13 @@ import type { FileResult, ResourceBudget, SharedGroup, TestFile, WorkspacePackag
 const CWD_SHIM = fileURLToPath(new URL('./cwd-shim.js', import.meta.url))
 // Vitest 5.0.5 resolves these per project but leaves them out of the ResolvedConfig type.
 type Untyped = { fileParallelism?: boolean; providedOptions?: { maxWorkers?: boolean } }
+/** Whether a config sets maxWorkers itself: Vitest 5 records that in providedOptions; Vitest 4 leaves maxWorkers unset otherwise. */
+const setsWorkers = (c: { maxWorkers: number } & Untyped) => c.providedOptions ? c.providedOptions.maxWorkers !== false : c.maxWorkers != null
 type OwnTestConfig = NonNullable<ViteUserConfig['test']>
 type ViteLoader = { loadConfigFromFile(env: { command: 'serve'; mode: string }, file: string, root: string, logLevel: 'silent'): Promise<{ config: ViteUserConfig } | null> }
 
 /** Why a project cannot share this process, or null. See docs/decisions/cwd-parity.md. */
-function separateReason(project: TestProject, own: OwnTestConfig): string | null {
+function separateReason(project: TestProject, own: OwnTestConfig, major: number): string | null {
   const config = project.config
   if (config.browser.enabled) return 'browser'
   if (config.typecheck.enabled) return 'typecheck'
@@ -27,8 +29,8 @@ function separateReason(project: TestProject, own: OwnTestConfig): string | null
   if ([config.globalSetup].flat().length) return 'global-setup'
   // Coverage is a root-only Vitest option: the shared process would drop the package's own.
   if (own.coverage?.enabled) return 'coverage'
-  // The root cache setting governs the shared run: a package that turned its module cache off keeps that in its own run.
-  if (own.fsModuleCache === false) return 'fs-module-cache-off'
+  // Vitest 5: the root cache setting governs the shared run, so a package that turned its module cache off keeps that in its own run.
+  if (major === 5 && own.fsModuleCache === false) return 'fs-module-cache-off'
   return null
 }
 
@@ -64,10 +66,12 @@ export class VitestAdapter {
     }
     const versions: string[] = []
     const versionWarnings: string[] = []
+    const majors = new Map<string, number>()
     for (const copy of copies.keys()) {
       const { version } = JSON.parse(readFileSync(resolve(copy, 'package.json'), 'utf8')) as { version: string }
       const policy = versionPolicy(version)
       if (!policy.ok) throw new Error(policy.error)
+      majors.set(copy, parseInt(version))
       if (!versions.includes(version)) versions.push(version)
       if (policy.warning && !versionWarnings.includes(policy.warning)) versionWarnings.push(policy.warning)
     }
@@ -88,7 +92,7 @@ export class VitestAdapter {
         const vitest = localPath(realRoot, copy)
         // Each group keeps its own Vite cache, which holds Vitest's results.json; the module cache is shared.
         const cacheDir = packages ? resolve(cache, 'vite', createHash('sha256').update(vitest).digest('hex').slice(0, 12)) : resolve(cache, 'vite')
-        const { context, specs } = await VitestAdapter.openGroup(root, budget, copy, cacheDir, shim, packages ? members : undefined, options, found)
+        const { context, specs } = await VitestAdapter.openGroup(root, budget, copy, majors.get(copy)!, cacheDir, shim, packages ? members : undefined, options, found)
         groups.push({ context, specs, vitest, members })
       }
       // Vitest refuses a project name used twice only within one instance. Task ids hash the name, so refuse it across copies too.
@@ -114,15 +118,17 @@ export class VitestAdapter {
     }
   }
 
-  private static async openGroup(root: string, budget: ResourceBudget, copy: string, cacheDir: string, shim: string, packages: WorkspacePackage[] | undefined,
+  private static async openGroup(root: string, budget: ResourceBudget, copy: string, major: number, cacheDir: string, shim: string, packages: WorkspacePackage[] | undefined,
     options: { vitestConfig?: string; isolated?: string[] }, found: Found): Promise<{ context: Vitest; specs: TestSpecification[] }> {
     const require = createRequire(resolve(copy, 'package.json'))
     const { createVitest } = await import(pathToFileURL(require.resolve('vitest/node')).href) as typeof import('vitest/node')
+    // Vitest 4's module cache is experimental and off by default: the tool leaves it to the package.
     const overrides: ViteUserConfig = {
       cacheDir,
-      test: { fsModuleCachePath: resolve(root, '.vitest-impact', 'cache', 'modules'), ...(packages ? { projects: packages.map(p => resolve(root, p.vitestConfig!)) } : {}) },
+      test: { ...(major === 5 ? { fsModuleCachePath: resolve(root, '.vitest-impact', 'cache', 'modules') } : {}), ...(packages ? { projects: packages.map(p => resolve(root, p.vitestConfig!)) } : {}) },
     }
-    const context = await createVitest({
+    // Vitest 4 has only this form; Vitest 5 accepts it and ignores the mode.
+    const context = await createVitest('test', {
       root,
       // Workspace mode: no root Vitest config; each package's own config is one project.
       ...(packages ? { config: false as const } : options.vitestConfig ? { config: resolve(root, options.vitestConfig) } : {}),
@@ -133,7 +139,7 @@ export class VitestAdapter {
       bail: 0,
       passWithNoTests: false,
       update: false,
-      experimental: { recordDependencies: false },
+      ...(major === 5 ? { experimental: { recordDependencies: false } } : {}),
     }, overrides)
     try {
       if (!packages && context.projects.length !== 1) throw new Error('A root Vitest config with several projects (test.projects) is not supported yet. Run each project separately with an outer concurrency budget.')
@@ -152,7 +158,7 @@ export class VitestAdapter {
         }
         // Cap native concurrency; never override a user's stricter serial/worker setting.
         // Vitest's default (CPU count minus one) is not a user setting: as in workspace mode, it is replaced.
-        const userSet = (c: { maxWorkers: number } & Untyped) => c.providedOptions?.maxWorkers !== false || c.fileParallelism === false
+        const userSet = (c: { maxWorkers: number } & Untyped) => setsWorkers(c) || c.fileParallelism === false
         const configuredLimit = Math.min(...[cfg, project.config].filter(userSet).map(c => c.maxWorkers), Infinity)
         if (configuredLimit < budget.maxWorkers) {
           budget.warnings.push(`Preserved Vitest's stricter ${configuredLimit}-worker limit.`)
@@ -174,7 +180,7 @@ export class VitestAdapter {
           const owner = packages.filter(p => dir === p.dir || dir.startsWith(`${p.dir}/`)).sort((a, b) => b.dir.length - a.dir.length)[0]
           if (!owner) throw new Error(`Vitest project root is outside every package: ${dir}`)
           owners.set(project, owner)
-          const reason = options.isolated?.includes(owner.name) ? 'isolated-in-config' : separateReason(project, own.get(owner)!)
+          const reason = options.isolated?.includes(owner.name) ? 'isolated-in-config' : separateReason(project, own.get(owner)!, major)
           if (reason && !reasons.has(owner)) reasons.set(owner, reason)
         }
         for (const p of packages) if (own.get(p)!.coverage?.enabled) coverage.add(p.name)
@@ -182,7 +188,7 @@ export class VitestAdapter {
         // A package's own worker limit, read before the shared-project code below rewrites it.
         for (const project of context.projects) {
           const owner = owners.get(project)!
-          if ((project.config as Untyped).providedOptions?.maxWorkers === false) continue
+          if (!setsWorkers(project.config)) continue
           limits.set(owner.name, Math.min(limits.get(owner.name) ?? Infinity, project.config.maxWorkers))
         }
         cfg.maxWorkers = budget.maxWorkers
@@ -190,8 +196,7 @@ export class VitestAdapter {
         for (const project of shared) {
           const owner = owners.get(project)!
           // The budget is the root limit; a project that sets a lower limit keeps it.
-          const setsLimit = (project.config as Untyped).providedOptions?.maxWorkers !== false
-          const limit = setsLimit ? Math.min(project.config.maxWorkers, budget.maxWorkers) : budget.maxWorkers
+          const limit = setsWorkers(project.config) ? Math.min(project.config.maxWorkers, budget.maxWorkers) : budget.maxWorkers
           const kept = `Kept ${owner.name}'s ${limit}-worker limit.`
           if (limit < budget.maxWorkers && !budget.warnings.includes(kept)) budget.warnings.push(kept)
           project.config.maxWorkers = limit
@@ -258,7 +263,8 @@ export class VitestAdapter {
     for (const group of this.groups) {
       const specs = group.specs.filter(spec => ids.has(spec.taskId) && !apart.has(this.owners.get(spec.project)?.name ?? ''))
       if (specs.length) {
-        await group.context.standalone()
+        // Vitest 4.0 has no standalone(); its init() does the same (in 4.1 and later, init() is a deprecated alias).
+        await (typeof group.context.standalone === 'function' ? group.context.standalone() : group.context.init())
         const result = await group.context.runTestSpecifications(specs, specs.length === group.specs.length)
         files.push(...this.results(result))
         unhandledErrors.push(...result.unhandledErrors)

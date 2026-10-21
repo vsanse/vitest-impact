@@ -1,6 +1,6 @@
 {
   "name": "vitest-impact",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "type": "module",
   "description": "Conservative change-based Vitest execution with resource budgets and shadow validation.",
@@ -19,7 +19,7 @@
     "url": "https://github.com/vsanse/vitest-impact/issues"
   },
   "bin": {
-    "vitest-impact": "./dist/cli.js"
+    "vitest-impact": "dist/cli.js"
   },
   "exports": {
     ".": "./dist/index.js"
@@ -47,12 +47,15 @@
     "minimatch": "10.2.4"
   },
   "peerDependencies": {
-    "vitest": "^5.0.5"
+    "vitest": "^4.0.18 || ^5.0.5"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
     "vitest": "5.0.5"
   },
-  "repository": "github:vsanse/vitest-impact"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vsanse/vitest-impact.git"
+  }
 }

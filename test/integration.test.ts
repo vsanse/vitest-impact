@@ -170,14 +170,18 @@ test('empty discovery is an error rather than a green run', async () => {
   expect(run.output).toContain('No test files')
 })
 
-test('global teardown failures are included in the saved exit status', async () => {
+// The tool keeps Vitest's own status. Vitest 5 fails the run. Vitest 4.1 only logs the error (its own `vitest run` exits 0).
+// Vitest 4.0 rejects close(), so the run is reported incomplete (its own `vitest run` exits 1).
+test('a global teardown failure is saved with the status Vitest gives it', async () => {
   const { root, base } = await fixture()
   await put(root, 'vitest.config.ts', "export default { test: { globalSetup: ['./global.ts'], include: ['test/**/*.test.ts'] } }\n")
   await put(root, 'global.ts', "export default () => () => { throw new Error('teardown broke') }\n")
   const run = await invoke(root, ['run', '--base', base])
-  expect(run.code, run.output).toBe(1)
-  expect(run.report.exitCode).toBe(1)
-  expect(run.report.runLevelFailure).toBe(true)
+  const [major, minor = 0] = fixtureVitest.split('.').map(Number)
+  const status = major === 5 ? 1 : minor >= 1 ? 0 : 2
+  expect(run.code, run.output).toBe(status)
+  expect(run.report.exitCode).toBe(status)
+  expect(run.report.runLevelFailure).toBe(status === 1)
 })
 
 test('aborts a plan if a config plugin writes source files during discovery', async () => {
