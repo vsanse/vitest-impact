@@ -144,3 +144,17 @@ manager, which sets them itself.
   the user's own `fsModuleCache` value stays (the first run after adoption starts cold; plain `vitest` runs
   keep their own location).
 - The tool never deletes `.vitest-impact/cache`; only `plan.json`, `report.json` and `summary.md` are removed at start.
+
+## Vitest 4 (2026-10-21, Vitest 4.0.18 and 4.1.7)
+
+- The working folder shim and the rest of this record hold: the suite passes on both versions.
+- The module cache is experimental (`experimental.fsModuleCache`, default off, folder
+  `node_modules/.experimental-vitest-cache` at the workspace root), and the CLI rejects `--fsModuleCachePath`.
+  For a Vitest 4 copy the tool passes no cache path, to the shared run or to separate units, and never turns
+  the cache on. `fs-module-cache-off` applies to Vitest 5 only. A package that turns the cache on keeps it on
+  in the shared process (a project's own `experimental.fsModuleCache` wins over the root's).
+- There is no `providedOptions`: Vitest 4 leaves `maxWorkers` unset unless a config sets it, so a set value
+  is the package's own limit.
+- A global teardown that throws: Vitest 4.1 only logs it (its own `vitest run` exits 0), and Vitest 4.0 rejects
+  `close()` (the tool reports an incomplete run, exit 2; its own `vitest run` exits 1). The tool keeps
+  Vitest's status and adds none of its own.
