@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { mkdtemp, mkdir, writeFile, symlink, rm, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, dirname } from 'node:path'
@@ -8,6 +9,10 @@ import { promisify } from 'node:util'
 const exec = promisify(execFile)
 export const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const cli = resolve(projectRoot, 'dist/cli.js')
+// The node_modules the fixtures link: that of the folder VITEST_IMPACT_FIXTURE_VITEST names (relative to this checkout),
+// for example `npm install --prefix .vitest-versions/4.1.7 vitest@4.1.7`, else this checkout's own.
+export const fixtureModules = resolve(projectRoot, process.env.VITEST_IMPACT_FIXTURE_VITEST || '.', 'node_modules')
+export const fixtureVitest = JSON.parse(readFileSync(resolve(fixtureModules, 'vitest/package.json'), 'utf8')).version
 export async function git(root, ...args) {
   return (await exec('git', ['-C', root, ...args], { timeout: 10_000 })).stdout.trim()
 }
@@ -17,7 +22,7 @@ export async function put(root, path, content) {
 }
 async function makeRepo(prefix, files) {
   const root = await mkdtemp(resolve(tmpdir(), prefix))
-  await symlink(resolve(projectRoot, 'node_modules'), resolve(root, 'node_modules'), 'dir')
+  await symlink(fixtureModules, resolve(root, 'node_modules'), 'dir')
   await Promise.all(Object.entries(files).map(([path, content]) => put(root, path, content)))
   await git(root, 'init', '-q')
   await git(root, 'add', '.')
@@ -78,12 +83,12 @@ export async function makeWorkspaceFixture(options = {}) {
   }
   return makeRepo('vitest-impact-ws-', { ...files, ...options.packages })
 }
-// Replaces the node_modules link with a real folder, as a package manager makes it: links to this checkout's
-// dependencies plus `links` (package name -> folder). Commits the change, so the returned base holds it.
+// Replaces the node_modules link with a real folder, as a package manager makes it: links to each entry of
+// fixtureModules plus `links` (package name -> folder). Commits the change, so the returned base holds it.
 export async function linkPackages(root, links) {
   await rm(resolve(root, 'node_modules'))
   await mkdir(resolve(root, 'node_modules'))
-  for (const entry of await readdir(resolve(projectRoot, 'node_modules'))) if (!entry.startsWith('.')) await symlink(resolve(projectRoot, 'node_modules', entry), resolve(root, 'node_modules', entry))
+  for (const entry of await readdir(fixtureModules)) if (!entry.startsWith('.')) await symlink(resolve(fixtureModules, entry), resolve(root, 'node_modules', entry))
   for (const [name, dir] of Object.entries(links)) {
     await mkdir(dirname(resolve(root, 'node_modules', name)), { recursive: true })
     await symlink(resolve(root, dir), resolve(root, 'node_modules', name))

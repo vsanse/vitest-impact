@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'vitest'
 import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
-import { makeFixture, makeWorkspaceFixture, put, invoke, linkPackages, projectRoot } from '../scripts/fixture.mjs'
+import { makeFixture, makeWorkspaceFixture, put, invoke, linkPackages, fixtureModules, fixtureVitest } from '../scripts/fixture.mjs'
 
 const cleanups: (() => Promise<void>)[] = []
 async function workspaceFixture(options: { packages?: Record<string, string>; config?: object } = {}) {
@@ -511,10 +511,10 @@ test('check says when a package on the isolated list passes in the shared proces
 // Passes only when the vitest a test file imports is the copy whose worker runs it (a forks worker's process.argv[1] is that copy's worker entry).
 const sameCopy = "import { test, expect } from 'vitest'; import { realpathSync } from 'node:fs'; import { createRequire } from 'node:module'; import { dirname } from 'node:path'\n" +
   "test('runs on the vitest it imports', () => expect(realpathSync(process.argv[1]!)).toContain(`${dirname(realpathSync(createRequire(import.meta.url).resolve('vitest/package.json')))}/`))\n"
-/** A real second copy of the tool's vitest in `dir` (its dependencies resolve upward to the shared install). */
+/** A real second copy of the fixtures' vitest in `dir` (its dependencies resolve upward to the shared install). */
 async function ownVitest(root: string, dir: string, version?: string) {
   const copy = resolve(root, dir, 'node_modules/vitest')
-  await cp(resolve(projectRoot, 'node_modules/vitest'), copy, { recursive: true })
+  await cp(resolve(fixtureModules, 'vitest'), copy, { recursive: true })
   if (version) await writeFile(resolve(copy, 'package.json'), JSON.stringify({ ...JSON.parse(await readFile(resolve(copy, 'package.json'), 'utf8')), version }))
 }
 
@@ -527,7 +527,7 @@ test('each package runs on the Vitest copy it resolves, one shared process per c
     ['packages/a/test/copy.test.ts', 'passed'], ['packages/b/test/copy.test.ts', 'passed'],
   ])
   expect(run.report.sharedGroups).toEqual([
-    { vitest: relative(realpathSync(root), realpathSync(resolve(projectRoot, 'node_modules/vitest'))), packages: ['@w/a'] },
+    { vitest: relative(realpathSync(root), realpathSync(resolve(fixtureModules, 'vitest'))), packages: ['@w/a'] },
     { vitest: 'packages/b/node_modules/vitest', packages: ['@w/b'] },
   ])
   expect(await readFile(resolve(root, '.vitest-impact/summary.md'), 'utf8')).toContain('Shared processes: 2 (one per Vitest copy)')
@@ -565,8 +565,8 @@ test('a Vitest package from which vitest cannot be resolved exits 2', async () =
   // vitest resolves from packages/a only.
   await rm(resolve(root, 'node_modules'))
   for (const dir of ['node_modules', 'packages/a/node_modules']) await mkdir(resolve(root, dir), { recursive: true })
-  for (const entry of await readdir(resolve(projectRoot, 'node_modules'))) if (entry !== 'vitest' && !entry.startsWith('.')) await symlink(resolve(projectRoot, 'node_modules', entry), resolve(root, 'node_modules', entry))
-  await symlink(resolve(projectRoot, 'node_modules/vitest'), resolve(root, 'packages/a/node_modules/vitest'))
+  for (const entry of await readdir(fixtureModules)) if (entry !== 'vitest' && !entry.startsWith('.')) await symlink(resolve(fixtureModules, entry), resolve(root, 'node_modules', entry))
+  await symlink(resolve(fixtureModules, 'vitest'), resolve(root, 'packages/a/node_modules/vitest'))
   const plan = await invoke(root, ['plan'])
   expect(plan.code, plan.output).toBe(2)
   expect(plan.output).toContain('Cannot resolve vitest from packages/b/package.json')
@@ -574,13 +574,14 @@ test('a Vitest package from which vitest cannot be resolved exits 2', async () =
 
 test('the version policy applies to every Vitest copy', async () => {
   const { root, base } = await workspaceFixture()
-  await ownVitest(root, 'packages/b', '5.0.99')
+  const untested = fixtureVitest.replace(/\d+$/, '99')
+  await ownVitest(root, 'packages/b', untested)
   await put(root, 'packages/a/src/index.ts', "export const name = 'a' as string\n")
   const plan = await invoke(root, ['plan', '--base', base])
   expect(plan.code, plan.output).toBe(0)
-  expect(plan.plan.fallbackReasons).toEqual(['untested-vitest-version: 5.0.99'])
+  expect(plan.plan.fallbackReasons).toEqual([`untested-vitest-version: ${untested}`])
   expect(plan.plan.mode).toBe('full')
-  expect(plan.plan.vitestVersion).toBe('5.0.5, 5.0.99')
+  expect(plan.plan.vitestVersion).toBe(`${fixtureVitest}, ${untested}`)
   const file = resolve(root, 'packages/b/node_modules/vitest/package.json')
   await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), version: '4.1.0' }))
   const refused = await invoke(root, ['plan'])

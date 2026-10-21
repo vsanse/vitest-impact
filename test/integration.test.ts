@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'vitest'
 import { mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
-import { makeFixture, put, invoke, git, projectRoot } from '../scripts/fixture.mjs'
+import { makeFixture, put, invoke, git, projectRoot, fixtureModules, fixtureVitest } from '../scripts/fixture.mjs'
 
 const cleanups: (() => Promise<void>)[] = []
 async function fixture(options = {}) {
@@ -232,16 +232,16 @@ test('the plan carries the package version and no outdated cache warning', async
   expect(run.plan.warnings).toContain('No dependency records are kept between runs yet. Deletions and unknown inputs broaden execution.')
 })
 
-test('an untested Vitest 5.x version forces a full plan', async () => {
+test('an untested Vitest version forces a full plan', async () => {
   const { root } = await fixture()
-  // node_modules with a vitest folder whose package.json says 5.0.99; every other file links to the real install.
-  const real = resolve(projectRoot, 'node_modules')
+  // node_modules with a vitest folder whose package.json says x.y.99; every other file links to the real install.
+  const untested = fixtureVitest.replace(/\d+$/, '99')
   await rm(resolve(root, 'node_modules'))
   await mkdir(resolve(root, 'node_modules/vitest'), { recursive: true })
-  for (const entry of await readdir(real)) if (entry !== 'vitest' && !entry.startsWith('.')) await symlink(resolve(real, entry), resolve(root, 'node_modules', entry))
-  for (const entry of await readdir(resolve(real, 'vitest'))) if (entry !== 'package.json') await symlink(resolve(real, 'vitest', entry), resolve(root, 'node_modules/vitest', entry))
-  const manifest = JSON.parse(await readFile(resolve(real, 'vitest/package.json'), 'utf8'))
-  await writeFile(resolve(root, 'node_modules/vitest/package.json'), JSON.stringify({ ...manifest, version: '5.0.99' }))
+  for (const entry of await readdir(fixtureModules)) if (entry !== 'vitest' && !entry.startsWith('.')) await symlink(resolve(fixtureModules, entry), resolve(root, 'node_modules', entry))
+  for (const entry of await readdir(resolve(fixtureModules, 'vitest'))) if (entry !== 'package.json') await symlink(resolve(fixtureModules, 'vitest', entry), resolve(root, 'node_modules/vitest', entry))
+  const manifest = JSON.parse(await readFile(resolve(fixtureModules, 'vitest/package.json'), 'utf8'))
+  await writeFile(resolve(root, 'node_modules/vitest/package.json'), JSON.stringify({ ...manifest, version: untested }))
   // The baseline committed the node_modules symlink; commit its removal.
   await git(root, 'add', '-A')
   await git(root, '-c', 'user.name=Tests', '-c', 'user.email=tests@example.invalid', 'commit', '-qm', 'real node_modules')
@@ -249,7 +249,7 @@ test('an untested Vitest 5.x version forces a full plan', async () => {
   await put(root, 'src/math.ts', 'export const add = (a: number, b: number) => b + a\n')
   const run = await invoke(root, ['plan', '--base', base])
   expect(run.code, run.output).toBe(0)
-  expect(run.plan.vitestVersion).toBe('5.0.99')
-  expect(run.plan.fallbackReasons).toContain('untested-vitest-version: 5.0.99')
+  expect(run.plan.vitestVersion).toBe(untested)
+  expect(run.plan.fallbackReasons).toContain(`untested-vitest-version: ${untested}`)
   expect(run.plan.mode).toBe('full')
 })
