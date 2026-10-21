@@ -44,6 +44,8 @@ function projectEntry(file: string, major: number) {
   let tags: unknown
   const plugin = {
     name: 'vitest',
+    // After the package's own plugins, and before Vitest names the project.
+    enforce: 'post' as const,
     config(config: { test?: { name?: string | { label?: string }; tags?: unknown } }) {
       const test = config.test ??= {}
       // An inline project is named after its index; a file project after the name in its package.json, else its folder.

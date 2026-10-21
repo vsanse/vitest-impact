@@ -160,8 +160,11 @@ manager, which sets them itself.
   Vitest 4 package is an inline project that extends its config file (root: the file's folder) and adds a
   plugin named `vitest`. That plugin also keeps what Vitest gives a file project and not an inline one: the
   name (from the folder's `package.json`, else the folder name; an inline project is named after its index)
-  and the config's `test.tags` (Vitest 4.1 sets an inline project's tags to the inline ones). The module cache
-  is unchanged: Vitest 4.1 only leaves its own inline plugin out of the cache key.
+  and the config's `test.tags` (Vitest 4.1 sets an inline project's tags to the inline ones). It runs after the
+  package's own plugins (`enforce: 'post'`), so a name or tags a package plugin sets in a `config` hook are kept.
+  Known gap: tags that a package plugin sets in `configResolved` are lost on Vitest 4.1. The module cache stays
+  on or off as before; its key now holds the plugin name `vitest` (Vitest 4.1 leaves only its own inline
+  `vitest:tags` plugin out of the key).
 - There is no `providedOptions`: Vitest 4 leaves `maxWorkers` unset unless a config sets it, so a set value
   is the package's own limit.
 - A global teardown that throws: Vitest 4.1 only logs it (its own `vitest run` exits 0), and Vitest 4.0 rejects
