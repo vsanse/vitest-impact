@@ -5,7 +5,7 @@ Run a repository's Vitest tests faster, and (opt-in) only the tests a change can
 - **Speed part.** One Vitest process for all the packages of a monorepo (one per Vitest copy when the install holds several), a worker count sized for the machine (including container CPU limits), warm caches in `.vitest-impact/cache`, and a report with time per package and phase.
 - **Selection part.** From a base revision, it computes which tests a change can affect. **Shadow mode is the default: it computes the selection, then runs the whole suite and reports any failure the selection would have missed.** `--mode selected` is an opt-in that runs only the selection. When the tool is not sure, it runs the full set and says why.
 
-One measurement, not a promise: in one private monorepo, running 44 packages in one Vitest process used 47% fewer CPU-seconds and 64% less peak memory than one Vitest process per package under Turbo (one local measurement). Measure your own repository.
+One measurement, not a promise: in one private monorepo with 44 packages (six Vitest copies, so six shared processes), the full run used 51% to 53% fewer CPU-seconds and 45% to 62% less peak memory than one Vitest process per package under Turbo, with the same failing test files (one local measurement, cold and warm cache). Measure your own repository.
 
 Requires Node 22.12+ and Vitest ^5.0.5. Tested with Vitest 5.0.5. Another 5.x version runs, but selection is turned off and the full set runs (with a warning in the plan). Vitest 4 and older are rejected. In a workspace this applies to every Vitest copy the packages resolve.
 
