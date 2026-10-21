@@ -220,19 +220,18 @@ The tool is a failure, even if it works in other ways, if it does any of these:
 
 ## 7. Constraints
 
-- **Language and runtime:** TypeScript, ESM, Node 22.12 or later (the Vitest 5 minimum).
-- **Vitest:** 5.0.4 or later, because selection needs `recordDependencies`. Vitest calls it
-  experimental, so the tool pins a tested range of versions. The tool's own CI also runs against the
-  latest Vitest release, to find a break early.
+- **Language and runtime:** TypeScript, ESM, Node 22.12 or later (the Vitest 5 minimum, kept for Vitest 4 too).
+- **Vitest:** 4.0.18 or later, or Vitest 5 (`^4.0.18 || ^5.0.5`). Selection uses an internal Vitest
+  method, so it runs only on tested versions (4.0.18, 4.1.7 and 5.0.5); another version in the range runs
+  the full set. The tool's own CI also runs against the latest Vitest release, to find a break early.
 - **Vitest APIs only:** the tool uses the public Node API (`createVitest`), `projects`, reporters, a
   custom sequencer, and `experimental.vcsProvider`. It does not patch Vitest.
 - **License and home (owner's decision):** MIT, in a new public GitHub repo under the account `vsanse`,
   public from the start. The tool is published to npm as `0.x` versions. The first user installs it from
   npm like any other team.
-- **First real user:** the first user's repo (a private TypeScript monorepo). It must first upgrade from Vitest 4.1.7 to 5.
-  That upgrade is step 0 of the plan, as a separate PR in that repo (about half a day with
-  `clearMocks: false`, or 1 to 2 days to keep the new default and fix about 22 test files). The tool
-  supports only Vitest 5, so the first real measurement waits for that PR.
+- **First real user:** the first user's repo (a private TypeScript monorepo), on Vitest 4.1.7. Since 0.3.0
+  the tool supports Vitest 4.0.18 or later as well as Vitest 5, so it runs there without an upgrade to
+  Vitest 5 first.
 
 ## 8. How we measure success
 
