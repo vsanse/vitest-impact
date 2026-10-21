@@ -23,6 +23,18 @@ describe('selection contract', () => {
     expect(result.decisions.filter(t => t.selected).map(t => t.id).sort()).toEqual(['fixture', 'math'])
     expect(result.mode).toBe('selective')
   })
+  test('a source change that selects nothing forces full, even when another change selects tests', async () => {
+    const related = async (paths: string[]) => (paths[0] === 'src/math.ts' ? ['math'] : [])
+    const result = await plan([{ path: 'src/math.ts', status: 'M' }, { path: 'src/orphan.ts', status: 'M' }], {}, related)
+    expect(result.mode).toBe('full')
+    expect(result.fallbackReasons).toContain('native-selection-empty-for-source: src/orphan.ts')
+  })
+  test('a changed test file that no other test imports does not force full', async () => {
+    const related = async (paths: string[]) => (paths[0] === 'src/math.ts' ? ['math'] : [])
+    const result = await plan([{ path: 'test/strings.test.ts', status: 'M' }, { path: 'src/math.ts', status: 'M' }], {}, related)
+    expect(result.mode).toBe('selective')
+    expect(result.decisions.filter(t => t.selected).map(t => t.id).sort()).toEqual(['math', 'strings'])
+  })
   test('new tests select themselves even when an ignore rule matches', async () => {
     const result = await plan([{ path: 'test/strings.test.ts', status: 'A' }], { ignore: ['**/*'] })
     expect(result.decisions.find(t => t.id === 'strings')?.selected).toBe(true)
@@ -33,7 +45,7 @@ describe('selection contract', () => {
   test('unknown inputs broaden execution', async () => {
     expect((await plan([{ path: 'schema.graphql', status: 'M' }])).fallbackReasons[0]).toContain('unclassified-input')
   })
-  test.each(['package.json', 'pnpm-lock.yaml', '.env.test', '.github/workflows/test.yml', 'vitest.config.ts'])('protects %s from ignore rules', async path => {
+  test.each(['package.json', 'pnpm-lock.yaml', '.env.test', '.github/workflows/test.yml', 'vitest.config.ts', 'pnpm-workspace.yaml', '.yarnrc.yml', 'packages/a/.yarnrc.yml'])('protects %s from ignore rules', async path => {
     expect((await plan([{ path, status: 'M' }], { ignore: ['**/*'] })).mode).toBe('full')
   })
   test('an unmatched fixture owner falls back to full', async () => {

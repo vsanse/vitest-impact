@@ -1,6 +1,6 @@
-import { availableParallelism, freemem, totalmem } from 'node:os'
+import { availableParallelism, freemem, loadavg, totalmem } from 'node:os'
 import { readFileSync } from 'node:fs'
-import type { ImpactConfig, ResourceBudget } from './types.js'
+import type { ImpactConfig, LoadSummary, ResourceBudget } from './types.js'
 
 export interface HostCapacity { cpu: number; availableMemoryMb: number }
 export interface MemoryInput {
@@ -52,10 +52,27 @@ export function budgetResources(options: ImpactConfig['resources'], host = detec
   const reserveMemoryMb = options.reserveMemoryMb ?? 512
   const memoryWorkers = Math.floor((memoryBudgetMb - reserveMemoryMb) / workerMemoryMb)
   if (memoryWorkers < 1) throw new Error(`Insufficient estimated memory: ${memoryBudgetMb} MB available, ${reserveMemoryMb} MB reserve, ${workerMemoryMb} MB per worker. Adjust the estimate or use a larger runner.`)
-  const requested = options.maxWorkers ?? Math.min(2, host.cpu)
+  const requested = options.maxWorkers ?? host.cpu
   const maxWorkers = Math.max(1, Math.min(requested, host.cpu, memoryWorkers))
   const warnings = ['Memory estimates choose concurrency; they are not enforced heap limits or an OOM guarantee.']
   if (!options.workerMemoryMb) warnings.push('Using an unmeasured 512 MB per-worker assumption. Calibrate this on your suite.')
   if (maxWorkers < requested) warnings.push(`Capped requested ${requested} workers to ${maxWorkers} for CPU/memory capacity.`)
   return { maxWorkers, availableCpu: host.cpu, memoryBudgetMb, workerMemoryMb, reserveMemoryMb, memoryEstimate: options.workerMemoryMb ? 'configured' : 'default-assumption', warnings }
+}
+
+/**
+ * Samples the 1-minute load average per CPU until the returned function is called, which returns the summary.
+ * `cpus` is the budget's CPU count (detectCapacity, cgroup-aware), so "per CPU" means the same CPUs the workers get.
+ */
+export function startLoadSampler(cpus: number, intervalMs = 1000): () => LoadSummary {
+  const values: number[] = []
+  const sample = () => values.push(loadavg()[0]! / cpus)
+  sample()
+  const timer = setInterval(sample, intervalMs)
+  timer.unref()
+  return () => {
+    clearInterval(timer)
+    sample()
+    return { peakPerCpu: Math.max(...values), meanPerCpu: values.reduce((a, b) => a + b, 0) / values.length, samples: values.length }
+  }
 }

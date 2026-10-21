@@ -9,7 +9,7 @@ const PROTECTED = [
   '**/vitest.config.*', '**/vite.config.*',
   '**/vitest.workspace.*', '**/vitest.projects.*', '**/tsconfig*.json',
   '**/.env', '**/.env.*', '**/.npmrc', '**/.nvmrc', '**/.node-version',
-  '**/vitest-impact.config.json', '.github/**',
+  '**/vitest-impact.config.json', '**/pnpm-workspace.yaml', '**/.yarnrc.yml', '.github/**',
 ]
 
 export interface Selection {
@@ -33,7 +33,8 @@ export async function selectTests(args: {
   const fallbackReasons = [...(args.forceReasons ?? [])]
   if (git.fallback) fallbackReasons.push(git.fallback)
   const ignoredChanges: string[] = []
-  const nativePaths: string[] = []
+  const sourcePaths: string[] = []
+  const testPaths: string[] = []
   const select = (test: TestDecision, reason: string) => { test.selected = true; test.reasons.push(reason) }
 
   for (const pattern of config.alwaysRun) {
@@ -52,7 +53,7 @@ export async function selectTests(args: {
     if (changedTests.length) {
       changedTests.forEach(t => select(t, `changed-test: ${path}`))
       // Test files may also be imported by other tests.
-      nativePaths.push(path)
+      testPaths.push(path)
       continue
     }
     if (matches(path, config.ignore)) { ignoredChanges.push(path); continue }
@@ -66,17 +67,20 @@ export async function selectTests(args: {
       if (!owners.length) fallbackReasons.push(`input-rule-has-no-tests: ${path}`)
       owners.forEach(t => select(t, `declared-input: ${path}`))
     }
-    if (matches(path, config.sourcePatterns)) nativePaths.push(path)
+    if (matches(path, config.sourcePatterns)) sourcePaths.push(path)
     else if (!rules.length) fallbackReasons.push(`unclassified-input: ${path}`)
   }
 
-  if (!fallbackReasons.length && nativePaths.length) {
+  if (!fallbackReasons.length && (sourcePaths.length || testPaths.length)) {
     try {
-      const ids = new Set(await args.related(nativePaths))
       const known = new Set(decisions.map(t => t.id))
-      if ([...ids].some(id => !known.has(id))) throw new Error('Native selection returned an unknown test specification')
-      if (!ids.size) fallbackReasons.push('native-selection-empty-for-source-change')
-      for (const test of decisions) if (ids.has(test.id)) select(test, `native-related: one or more of ${nativePaths.join(', ')}`)
+      // ponytail: one native graph walk per changed path; batch the calls if a PR with hundreds of source changes plans too slowly.
+      for (const path of [...sourcePaths, ...testPaths]) {
+        const ids = new Set(await args.related([path]))
+        if ([...ids].some(id => !known.has(id))) throw new Error('Native selection returned an unknown test specification')
+        if (!ids.size && sourcePaths.includes(path)) fallbackReasons.push(`native-selection-empty-for-source: ${path}`)
+        for (const test of decisions) if (ids.has(test.id)) select(test, `native-related: ${path}`)
+      }
     } catch (error) {
       fallbackReasons.push(`native-analysis-failed: ${error instanceof Error ? error.message : String(error)}`)
     }

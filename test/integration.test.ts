@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from 'vitest'
-import { rm } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
-import { makeFixture, put, invoke, git } from '../scripts/fixture.mjs'
+import { makeFixture, put, invoke, git, projectRoot } from '../scripts/fixture.mjs'
 
 const cleanups: (() => Promise<void>)[] = []
 async function fixture(options = {}) {
@@ -194,4 +195,61 @@ test('preserves native serial execution instead of enabling parallelism', async 
   const run = await invoke(root, ['run', '--base', base, '--max-workers', '2'])
   expect(run.code, run.output).toBe(0)
   expect(run.plan.resources.maxWorkers).toBe(1)
+})
+
+test('a single-project run sets NODE_ENV to test, as plain vitest does', async () => {
+  const { root } = await fixture()
+  await put(root, 'test/env.test.ts', "import { test, expect } from 'vitest'; test('node env', () => expect(process.env.NODE_ENV).toBe('test'))\n")
+  const run = await invoke(root, ['run', '--mode', 'full'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.report.executed.find(t => t.file === 'test/env.test.ts').state).toBe('passed')
+})
+
+test("a single project that sets no maxWorkers gets the budget, not Vitest's default", async () => {
+  const { root } = await fixture()
+  await put(root, 'vitest.config.ts', "import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { include: ['test/**/*.test.ts'] } })\n")
+  // Vitest's default is the CPU count minus one, which the old code kept as if the project had set it.
+  const run = await invoke(root, ['plan', '--max-workers', String(availableParallelism())])
+  expect(run.code, run.output).toBe(0)
+  expect(run.plan.resources.maxWorkers).toBe(run.plan.resources.availableCpu)
+  expect(run.plan.resources.warnings.join(' ')).not.toContain('Preserved')
+})
+
+test('a root Vitest config with several projects is refused with a message that says so', async () => {
+  const { root } = await fixture()
+  await put(root, 'vitest.config.ts', "import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { projects: [{ test: { name: 'one', include: ['test/math.test.ts'] } }, { test: { name: 'two', include: ['test/strings.test.ts'] } }] } })\n")
+  const run = await invoke(root, ['plan', '--vitest-config', 'vitest.config.ts'])
+  expect(run.code).toBe(2)
+  expect(run.output).toContain('A root Vitest config with several projects (test.projects) is not supported yet.')
+})
+
+test('the plan carries the package version and no outdated cache warning', async () => {
+  const { root } = await fixture()
+  const run = await invoke(root, ['plan'])
+  expect(run.code, run.output).toBe(0)
+  expect(run.plan.toolVersion).toBe(JSON.parse(await readFile(resolve(projectRoot, 'package.json'), 'utf8')).version)
+  expect(run.plan.warnings.join(' ')).not.toContain('result cache')
+  expect(run.plan.warnings).toContain('No dependency records are kept between runs yet. Deletions and unknown inputs broaden execution.')
+})
+
+test('an untested Vitest 5.x version forces a full plan', async () => {
+  const { root } = await fixture()
+  // node_modules with a vitest folder whose package.json says 5.0.99; every other file links to the real install.
+  const real = resolve(projectRoot, 'node_modules')
+  await rm(resolve(root, 'node_modules'))
+  await mkdir(resolve(root, 'node_modules/vitest'), { recursive: true })
+  for (const entry of await readdir(real)) if (entry !== 'vitest' && !entry.startsWith('.')) await symlink(resolve(real, entry), resolve(root, 'node_modules', entry))
+  for (const entry of await readdir(resolve(real, 'vitest'))) if (entry !== 'package.json') await symlink(resolve(real, 'vitest', entry), resolve(root, 'node_modules/vitest', entry))
+  const manifest = JSON.parse(await readFile(resolve(real, 'vitest/package.json'), 'utf8'))
+  await writeFile(resolve(root, 'node_modules/vitest/package.json'), JSON.stringify({ ...manifest, version: '5.0.99' }))
+  // The baseline committed the node_modules symlink; commit its removal.
+  await git(root, 'add', '-A')
+  await git(root, '-c', 'user.name=Tests', '-c', 'user.email=tests@example.invalid', 'commit', '-qm', 'real node_modules')
+  const base = await git(root, 'rev-parse', 'HEAD')
+  await put(root, 'src/math.ts', 'export const add = (a: number, b: number) => b + a\n')
+  const run = await invoke(root, ['plan', '--base', base])
+  expect(run.code, run.output).toBe(0)
+  expect(run.plan.vitestVersion).toBe('5.0.99')
+  expect(run.plan.fallbackReasons).toContain('untested-vitest-version: 5.0.99')
+  expect(run.plan.mode).toBe('full')
 })

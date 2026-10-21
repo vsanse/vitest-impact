@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { ImpactConfig } from './types.js'
@@ -22,7 +22,7 @@ function patterns(value: unknown, label: string): string[] {
 
 export function parseConfig(value: unknown): ImpactConfig {
   const data = object(value, 'Config')
-  keys(data, ['version', 'sourcePatterns', 'inputs', 'forceFull', 'ignore', 'alwaysRun', 'resources'], 'config')
+  keys(data, ['version', 'sourcePatterns', 'inputs', 'forceFull', 'ignore', 'alwaysRun', 'isolated', 'resources'], 'config')
   if (data.version !== 1) throw new Error('Config version must be 1')
   const resources = object(data.resources ?? {}, 'resources')
   keys(resources, ['maxWorkers', 'memoryBudgetMb', 'workerMemoryMb', 'reserveMemoryMb'], 'resources')
@@ -38,6 +38,8 @@ export function parseConfig(value: unknown): ImpactConfig {
     if (!files.length || !tests.length) throw new Error('Each input rule needs files and tests')
     return { files, tests }
   })
+  const isolated = data.isolated ?? []
+  if (!Array.isArray(isolated) || isolated.some(n => typeof n !== 'string' || !n)) throw new Error('isolated must be an array of package names')
   return {
     version: 1,
     sourcePatterns: patterns(data.sourcePatterns, 'sourcePatterns'),
@@ -45,6 +47,7 @@ export function parseConfig(value: unknown): ImpactConfig {
     forceFull: patterns(data.forceFull, 'forceFull'),
     ignore: patterns(data.ignore, 'ignore'),
     alwaysRun: patterns(data.alwaysRun, 'alwaysRun'),
+    isolated: isolated as string[],
     resources: resources as ImpactConfig['resources'],
   }
 }
@@ -64,4 +67,14 @@ export async function loadConfig(root: string, path?: string): Promise<{ config:
 }
 export function hash(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex')
+}
+
+/** Merge names into the config's `isolated` list (sorted, no duplicates), keeping every other key. */
+export async function writeIsolated(path: string, names: string[]): Promise<void> {
+  let data: Record<string, unknown> = { version: 1 }
+  try { data = object(JSON.parse(await readFile(path, 'utf8')), 'Config') }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  const existing = Array.isArray(data.isolated) ? data.isolated as string[] : []
+  data.isolated = [...new Set([...existing, ...names])].sort()
+  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`)
 }

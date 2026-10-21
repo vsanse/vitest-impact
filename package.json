@@ -1,9 +1,23 @@
 {
   "name": "vitest-impact",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
   "description": "Conservative change-based Vitest execution with resource budgets and shadow validation.",
+  "keywords": [
+    "vitest",
+    "monorepo",
+    "workspace",
+    "test-impact",
+    "test-selection",
+    "ci",
+    "shadow-mode"
+  ],
+  "author": "Vishal Sanserwal",
+  "homepage": "https://github.com/vsanse/vitest-impact#readme",
+  "bugs": {
+    "url": "https://github.com/vsanse/vitest-impact/issues"
+  },
   "bin": {
     "vitest-impact": "./dist/cli.js"
   },
@@ -14,6 +28,7 @@
     "dist",
     "README.md",
     "LICENSE",
+    "CHANGELOG.md",
     "examples"
   ],
   "engines": {

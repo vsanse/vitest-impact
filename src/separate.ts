@@ -1,0 +1,113 @@
+import { spawn } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { mkdir, readFile, rm } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { delimiter, dirname, resolve } from 'node:path'
+import { performance } from 'node:perf_hooks'
+import { localPath } from './git.js'
+import type { FileResult, PackageResult } from './types.js'
+
+export type { PackageResult } from './types.js'
+
+export function packageManager(root: string): 'pnpm' | 'yarn' | 'npm' {
+  try {
+    const field = (JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as { packageManager?: unknown }).packageManager
+    const name = typeof field === 'string' ? field.split('@')[0] : ''
+    if (name === 'pnpm' || name === 'yarn' || name === 'npm') return name
+  } catch { /* no readable package.json: fall through to the lockfile */ }
+  if (existsSync(resolve(root, 'pnpm-lock.yaml'))) return 'pnpm'
+  if (existsSync(resolve(root, 'yarn.lock'))) return 'yarn'
+  return 'npm'
+}
+
+/** A test that failed on its own timeout or on a per-test hook's. Vitest's JSON report holds the stack, which starts with "Error: ". */
+export const TIMED_OUT = /(?:^|Error: )(Test|Hook) timed out in \d+ms/
+
+interface JsonReport { testResults?: { name: string; status: string; startTime: number; endTime: number; assertionResults?: { status: string; fullName?: string; title?: string; ancestorTitles?: string[]; failureMessages?: string[] }[] }[] }
+
+export function parseJsonReport(json: unknown, root: string, idsByFile: Map<string, string>, project: string): FileResult[] {
+  return ((json as JsonReport).testResults ?? []).map(result => {
+    const file = localPath(root, result.name)
+    const counts = { passed: 0, failed: 0, skipped: 0, pending: 0 }
+    const timedOut: string[] = []
+    for (const test of result.assertionResults ?? []) {
+      if (test.failureMessages?.some(m => TIMED_OUT.test(m))) timedOut.push(test.fullName ?? [...(test.ancestorTitles ?? []), test.title ?? ''].join(' > '))
+      if (test.status === 'passed') counts.passed++
+      else if (test.status === 'failed') counts.failed++
+      else if (test.status === 'pending') counts.pending++
+      else counts.skipped++
+    }
+    // A file the plan does not know keeps its path as id, so the plan check reports it as unexpected.
+    return { id: idsByFile.get(file) ?? file, file, project, state: result.status, durationMs: result.endTime - result.startTime, ...counts, phases: null, timedOut }
+  })
+}
+
+export interface SeparateUnit {
+  package: string
+  dir: string
+  kind: 'vitest' | 'script'
+  /** Absolute test file paths to pass as filters. Empty runs the whole package. Ignored for scripts. */
+  files: string[]
+  /** Planned test files (root-relative) to their ids, for mapping the JSON report. */
+  idsByFile: Map<string, string>
+}
+
+/** The environment the tool started with. Units get this, not what Vitest and Vite set in this process. */
+export const startEnv: NodeJS.ProcessEnv = { ...process.env }
+
+/**
+ * What `npm run test` in the package adds to the environment: the package name and version, the lifecycle
+ * event, and node_modules/.bin of the package folder and of each folder above it up to the root, first on PATH.
+ */
+export function packageEnv(root: string, dir: string): Record<string, string> {
+  const json = JSON.parse(readFileSync(resolve(root, dir, 'package.json'), 'utf8')) as { name?: unknown; version?: unknown }
+  const env: Record<string, string> = { npm_lifecycle_event: 'test' }
+  if (typeof json.name === 'string') env.npm_package_name = json.name
+  if (typeof json.version === 'string') env.npm_package_version = json.version
+  const bins: string[] = []
+  for (let folder = resolve(root, dir); ; folder = dirname(folder)) {
+    bins.push(resolve(folder, 'node_modules', '.bin'))
+    if (folder === resolve(root) || folder === dirname(folder)) break
+  }
+  const key = Object.keys(startEnv).find(k => k.toUpperCase() === 'PATH') ?? 'PATH'
+  env[key] = [...bins, ...(startEnv[key] ? [startEnv[key]] : [])].join(delimiter)
+  return env
+}
+
+function exec(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<{ code: number | null; error?: string }> {
+  return new Promise(done => {
+    const child = spawn(command, args, { cwd, env, stdio: 'inherit', shell: process.platform === 'win32' && command !== process.execPath })
+    child.on('error', error => done({ code: null, error: `could not start ${command}: ${(error as NodeJS.ErrnoException).code ?? error.message}` }))
+    child.on('close', code => done({ code }))
+  })
+}
+
+// ponytail: separate units run one after another; run them in parallel within the budget if they dominate wall time.
+export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: number, outDir: string): Promise<{ result: PackageResult; files: FileResult[]; errors: string[] }> {
+  const cwd = resolve(root, unit.dir)
+  const start = performance.now()
+  let exitCode: number | null
+  let files: FileResult[] = []
+  const errors: string[] = []
+  const note = (run: { code: number | null; error?: string }) => { if (run.error) errors.push(`${unit.package}: ${run.error}`); return run.code }
+  if (unit.kind === 'script') {
+    exitCode = note(await exec(packageManager(root), ['run', 'test'], cwd, startEnv))
+  } else {
+    const require = createRequire(resolve(cwd, 'package.json'))
+    const pkgFile = require.resolve('vitest/package.json')
+    const bin = (JSON.parse(await readFile(pkgFile, 'utf8')) as { bin: string | Record<string, string> }).bin
+    const vitestBin = resolve(dirname(pkgFile), typeof bin === 'string' ? bin : bin.vitest!)
+    await mkdir(outDir, { recursive: true })
+    const out = resolve(outDir, `${encodeURIComponent(unit.package)}.json`)
+    await rm(out, { force: true })
+    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--allowOnly=false', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, `--fsModuleCachePath=${resolve(root, '.vitest-impact', 'cache', 'modules')}`, ...unit.files], cwd, { ...startEnv, ...packageEnv(root, unit.dir) }))
+    // No usable report: the planned files become missingFiles, and the cause is recorded.
+    let text: string | null = null
+    try { text = await readFile(out, 'utf8') } catch { errors.push(`${unit.package}: no JSON report`) }
+    if (text !== null) {
+      try { files = parseJsonReport(JSON.parse(text), root, unit.idsByFile, unit.package) }
+      catch { errors.push(`${unit.package}: JSON report did not parse`) }
+    }
+  }
+  return { result: { name: unit.package, mode: unit.kind === 'script' ? 'script' : 'separate', exitCode, durationMs: performance.now() - start, phases: null }, files, errors }
+}
