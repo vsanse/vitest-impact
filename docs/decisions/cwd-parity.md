@@ -49,10 +49,10 @@ path first in `setupFiles`.
 
 A test file imports the `vitest` that its package resolves (`test`, `expect`, the runner state behind
 them). The worker that runs the file comes from the Vitest copy that created the shared instance. If the
-two are different copies, results can differ from plain `vitest run`. This happened in a pnpm monorepo
-with 44 packages: pnpm installed six physical copies of Vitest 5.0.5 (peer-dependency variants, each its
-own folder under `node_modules/.pnpm/`), the shared run used the root's copy, and 10 test files that fail
-under plain `vitest run` in their own package passed under the tool.
+two are different copies, results can differ from plain `vitest run`. pnpm can install several physical
+copies of one Vitest version (peer-dependency variants, each its own folder under `node_modules/.pnpm/`).
+When the shared run used the root's copy, test files that fail under plain `vitest run` in their own
+package passed under the tool.
 
 How the tool makes sure of it, in workspace mode:
 
@@ -155,8 +155,8 @@ manager, which sets them itself.
   in the shared process (a project's own `experimental.fsModuleCache` wins over the root's).
 - Plugin names: a root `vitest run` on Vitest 4 has a plugin named `vitest`, and a project has only
   `vitest:project` (Vitest 5 has no plugin named `vitest` in either). Plugins such as vite-plugin-wasm look for
-  that name: without it, vite-plugin-wasm loads a `.wasm` file by a `/@fs/` URL that fails in Node. Measured on
-  the 44-package monorepo: 48 files that pass with plain `vitest run` failed in the shared process. So a
+  that name: without it, vite-plugin-wasm loads a `.wasm` file by a `/@fs/` URL that fails in Node, so files
+  that pass with plain `vitest run` failed in the shared process. So a
   Vitest 4 package is an inline project that extends its config file (root: the file's folder) and adds a
   plugin named `vitest`. That plugin also keeps what Vitest gives a file project and not an inline one: the
   name (from the folder's `package.json`, else the folder name; an inline project is named after its index)
