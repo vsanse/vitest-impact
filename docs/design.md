@@ -64,27 +64,16 @@ apply "through and through": when selection picks almost the full suite, that ru
 
 ## 2. Evidence that shaped this design
 
-All numbers come from the first user, a private TypeScript monorepo. Its CI runs on
-2-vCPU runners with Vitest 4.1.7, `forks` pool, isolation on, and jsdom for React tests.
-
 | Fact | Source |
 |---|---|
-| 3,222 test files, about 35,000 test cases. The web app has 1,593 files. | `git ls-files` count |
-| Time per phase in web shards: import 54%, jsdom environment 18%, test bodies 16%, transform 3%. Other packages: import 52%, test bodies 32%. | Vitest summary lines from 48 CI shard logs |
-| The other-packages job failed 23% of runs (12 of 53). All failures were timeouts or one out-of-memory error, in 7 different packages, also on PRs that changed unrelated code. | 80 CI runs, 2026-10-14 to 2026-10-16 |
-| Turbo runs about 7 Vitest processes at the same time on 2 vCPUs. A package suite that takes 14.5 s locally takes 700 to 820 s in CI. | CI logs; a comment in that package's Vitest config |
-| One release PR: 6 CI attempts, the same test timed out every time. Release PR of 2026-10-16: each attempt timed out on a different test. | two CI runs |
-| Local measurement, 44 packages: one Vitest process used 47% fewer CPU-seconds (1,493 against 2,834) and 64% less peak memory (1.48 GB against 4.14 GB) than Turbo with one Vitest process per package. It also ran about 15% more test files. Projection for 2 vCPUs: about 12 min against about 24 min. The real CI time with Turbo was 23 min 49 s. | Spike, 2026-10-16 |
-| In one process, 2 test files failed because they use `process.cwd()` as the package folder. 19 test files in those packages use `process.cwd()`. | Spike, 2026-10-16 |
-| `vmForks` on the web app: out of memory at about 4 GB, and about 13 tests failed. | Spike, 2026-10-16 |
-| Vitest `--shard` splits by a hash of the file path with an equal file count. It ignores timing. The web shards of the first user are already even (12.6 to 13.1 min median). | Vitest `BaseSequencer.ts`; CI data |
+| Vitest `--shard` splits by a hash of the file path with an equal file count. It ignores timing. | Vitest `BaseSequencer.ts` |
 | Vitest 5.0.4 (2026-10-12) added `experimental.recordDependencies`. It records the files that each test file loads at run time. `--changed` and `related` can then use these records. It does not record files read with `fs`, imports in a `vi.mock` factory, or dynamic imports that did not run. | Vitest docs, `config/experimental` |
 | Open Vitest bugs: a change in a linked workspace package selects no tests and exits with code 0 (#11585). A test that imports a deleted file is skipped (#11566). | GitHub issues |
 
 What the evidence rules out:
 
 - A Rust rewrite or a new runner. The runner core is not the cost. Vite 8 already does transforms in
-  Rust (Oxc), and transform is only 3% of the time.
+  Rust (Oxc).
 - AI selection in version 1. There are no published accuracy numbers for LLM test selection in JS/TS.
   Meta and Google use classic models (gradient-boosted trees).
 
@@ -93,7 +82,7 @@ What the evidence rules out:
 - **G1.** A full run is faster on a small CI runner than the same run under Turbo with one Vitest
   process per package.
 - **G2.** A normal PR uses half of today's test time or less. "Today" means what the team's CI runs now.
-  For the first user, that is Turbo's affected packages with the Turbo cache. So the tool must beat a
+  In a repo that uses Turbo, that is Turbo's affected packages with the Turbo cache. So the tool must beat a
   package-level filter, not only the full suite. (My reading of the owner's words "PR test time".)
 - **G3.** Zero missed failures. Selection proves this in shadow mode before a team switches it on.
 - **G4.** A team can adopt the tool with zero changes to its tests.
@@ -189,7 +178,7 @@ The tool is a failure, even if it works in other ways, if it does any of these:
    each changed file. It never exits with code 0 without that reason.
 5. **Shadow mode** (the default when a team installs the tool).
    - On each PR, the tool computes the selection, then runs the same set of tests that CI runs today
-     (the reference set). For the first user, that is Turbo's affected packages. Shadow mode adds no test
+     (the reference set), for example Turbo's affected packages. Shadow mode adds no test
      time compared with today.
    - The reference run decides pass or fail.
    - For each test that failed in the reference run, the tool checks whether the selection included it.
@@ -204,8 +193,8 @@ The tool is a failure, even if it works in other ways, if it does any of these:
    mode with zero misses for a fixed period first (4 weeks, my guess).
 7. **Full run on the base branch.** Every merge to the base branch (for example `main`) runs the full
    suite and writes the dependency records that PRs read.
-8. **Several CI jobs.** A suite can run in several jobs (for example 4 web shards and 1 job for the
-   other packages).
+8. **Several CI jobs.** A suite can run in several jobs (for example several shards of one
+   large package and 1 job for the rest).
    - On the base branch, each job writes its own records. A merge step combines them into one set.
    - If the records of any job are missing for a commit, PRs on that commit run the full set.
    - On a PR, the tool selects first, then shards the selected tests.
@@ -220,29 +209,24 @@ The tool is a failure, even if it works in other ways, if it does any of these:
 
 ## 7. Constraints
 
-- **Language and runtime:** TypeScript, ESM, Node 22.12 or later (the Vitest 5 minimum).
-- **Vitest:** 5.0.4 or later, because selection needs `recordDependencies`. Vitest calls it
-  experimental, so the tool pins a tested range of versions. The tool's own CI also runs against the
-  latest Vitest release, to find a break early.
+- **Language and runtime:** TypeScript, ESM, Node 22.12 or later (the Vitest 5 minimum, kept for Vitest 4 too).
+- **Vitest:** 4.0.18 or later, or Vitest 5 (`^4.0.18 || ^5.0.5`). Selection uses an internal Vitest
+  method, so it runs only on tested versions (4.0.18, 4.1.7 and 5.0.5); another version in the range runs
+  the full set. The tool's own CI also runs against the latest Vitest release, to find a break early.
 - **Vitest APIs only:** the tool uses the public Node API (`createVitest`), `projects`, reporters, a
   custom sequencer, and `experimental.vcsProvider`. It does not patch Vitest.
 - **License and home (owner's decision):** MIT, in a new public GitHub repo under the account `vsanse`,
-  public from the start. The tool is published to npm as `0.x` versions. The first user installs it from
-  npm like any other team.
-- **First real user:** the first user's repo (a private TypeScript monorepo). It must first upgrade from Vitest 4.1.7 to 5.
-  That upgrade is step 0 of the plan, as a separate PR in that repo (about half a day with
-  `clearMocks: false`, or 1 to 2 days to keep the new default and fix about 22 test files). The tool
-  supports only Vitest 5, so the first real measurement waits for that PR.
+  public from the start. The tool is published to npm as `0.x` versions.
 
 ## 8. How we measure success
 
 | Goal | Measure | Target |
 |---|---|---|
-| G1 | Wall time of the test step for a full run, on the same runner size, tool against Turbo | Faster. The projection for the first user's other-packages job is about 24 min down to about 12 min. |
+| G1 | Wall time of the test step for a full run, on the same runner size, tool against Turbo | Faster. |
 | G2 | Test step time of a normal PR with selection on, against what CI runs today on the same PR | 50% or less, as a median over the PRs in the shadow period |
 | G3 | Misses in shadow mode | 0 over the shadow period |
 | G4 | Test files changed to adopt | 0 |
-| Load failures | Share of runs that fail with a timeout or out of memory | Lower than today (23% of runs of the first user's other-packages job) |
+| Load failures | Share of runs that fail with a timeout or out of memory | Lower than today |
 
 ## 9. Risks
 
@@ -254,8 +238,8 @@ The tool is a failure, even if it works in other ways, if it does any of these:
 - **Selection gains depend on the repo.** In a frontend app, many tests import shared stores. A change
   to one shared file can select most of the suite. The 50% target can be out of reach for some PRs.
   Shadow mode shows the real number before a team relies on it.
-- **The web app of the first user is already one process for each shard.** The one-process gain applies
-  to the other-packages job. For the web app, the gain must come from warm caches and from selection.
+- **A single large package is already one process.** The one-process gain applies to repos with many
+  packages. For one large package, the gain must come from warm caches and from selection.
 
 ## 10. Left to the builder
 

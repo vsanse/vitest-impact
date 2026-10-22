@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Vitest 4 support: Vitest 4.0.18 and later run, in full mode and with selection. Packages on Vitest 4 and Vitest 5 copies run in one invocation, one shared process per copy.
+- Module cache: on Vitest 4 it is experimental and off unless a package turns it on. The tool never turns it on and passes no cache path (no `fsModuleCachePath`, no `--fsModuleCachePath` for separate units), and `fs-module-cache-off` applies to Vitest 5 only, so the warm-cache gain applies to Vitest 5 only.
+- Plugin parity on Vitest 4: each package runs as an inline project that extends its config file and adds a plugin named `vitest`, as its own `vitest run` has. Plugins that look for that name (such as vite-plugin-wasm) behave as in the package's own run. Project names and tags stay those of the config file.
+- Version policy: `peerDependencies.vitest` is `^4.0.18 || ^5.0.5`. Selection runs on Vitest 4.0.18, 4.1.7 and 5.0.5; another 4.x or 5.x runs the full set with a warning; 4.0.17 and older, and 6.x, exit 2.
+
 ## 0.2.0
 
 - Monorepo runs: discovers workspace packages (`pnpm-workspace.yaml` or `package.json` `workspaces`) and runs their Vitest tests in one process. Script packages run their own `test` script. The root package's test script is never run.

@@ -44,6 +44,7 @@ test('a script that cannot start is reported as an error, not a plain exit code'
 test('parseJsonReport lists tests whose failure is a timeout', () => {
   const json = { testResults: [{ name: '/r/s.test.ts', status: 'failed', startTime: 0, endTime: 1, assertionResults: [
     { status: 'failed', fullName: 'slow waits', failureMessages: ['Test timed out in 5000ms.'] },
+    { status: 'failed', fullName: 'vitest 4', failureMessages: ['Error: STACK_TRACE_ERROR\n    at task (file:///r/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)'] },
     { status: 'failed', fullName: 'other', failureMessages: ['AssertionError'] }] }] }
-  expect(parseJsonReport(json, '/r', new Map(), 'p')[0]!.timedOut).toEqual(['slow waits'])
+  expect(parseJsonReport(json, '/r', new Map(), 'p')[0]!.timedOut).toEqual(['slow waits', 'vitest 4'])
 })

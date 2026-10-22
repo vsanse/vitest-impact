@@ -5,9 +5,7 @@ Run a repository's Vitest tests faster, and (opt-in) only the tests a change can
 - **Speed part.** One Vitest process for all the packages of a monorepo (one per Vitest copy when the install holds several), a worker count sized for the machine (including container CPU limits), warm caches in `.vitest-impact/cache`, and a report with time per package and phase.
 - **Selection part.** From a base revision, it computes which tests a change can affect. **Shadow mode is the default: it computes the selection, then runs the whole suite and reports any failure the selection would have missed.** `--mode selected` is an opt-in that runs only the selection. When the tool is not sure, it runs the full set and says why.
 
-One measurement, not a promise: in one private monorepo with 44 packages (six Vitest copies, so six shared processes), the full run used 51% to 53% fewer CPU-seconds and 45% to 62% less peak memory than one Vitest process per package under Turbo, with the same failing test files (one local measurement, cold and warm cache). Measure your own repository.
-
-Requires Node 22.12+ and Vitest ^5.0.5. Tested with Vitest 5.0.5. Another 5.x version runs, but selection is turned off and the full set runs (with a warning in the plan). Vitest 4 and older are rejected. In a workspace this applies to every Vitest copy the packages resolve.
+Requires Node 22.12+ and Vitest 4.0.18 or later, or Vitest 5 (`^4.0.18 || ^5.0.5`). Selection runs on the tested versions: Vitest 4.0.18, 4.1.7 and 5.0.5. Another 4.x or 5.x version runs, but selection is turned off and the full set runs (with a warning in the plan). Vitest 4.0.17 and older, and Vitest 6, are rejected. In a workspace this applies to every Vitest copy the packages resolve, and packages on Vitest 4 and Vitest 5 copies run in one invocation, one shared process per copy. On Vitest 4 the module cache is experimental and off unless the package turns it on, so the warm-cache gain applies to Vitest 5 only (see [Caches](#caches)).
 
 ## Install
 
@@ -77,7 +75,7 @@ A Vitest package runs in its own Vitest process, with its own settings, when the
 | `file-parallelism-off` | `fileParallelism: false` is a per-package setting. |
 | `global-setup` | `globalSetup` runs in the main process and sees the repo root. |
 | `coverage` | Coverage is on in the package config. The package runs alone, in full (under `--shard`, whole in one shard), with its own thresholds. |
-| `fs-module-cache-off` | The package sets `fsModuleCache: false`, which a shared run cannot honor for one package only. |
+| `fs-module-cache-off` | Vitest 5 only: the package sets `fsModuleCache: false`, which a shared run cannot honor for one package only. |
 
 A separate package keeps its own result: if its process exits non-zero, the run exits 1, even if every test passed (coverage thresholds, unhandled errors). Separate units run one after another. Like the shared run, they never allow `.only` (`--allowOnly=false`), in CI or not.
 
@@ -102,10 +100,10 @@ Some packages pass alone but fail when sharing a process (shared module state, p
 
 Shared runs write to `.vitest-impact/cache`:
 
-- `cache/modules`: Vitest's transform cache (`fsModuleCachePath`). Separate Vitest units get the same path.
+- `cache/modules`: Vitest 5's transform cache (`fsModuleCachePath`). Separate Vitest 5 units get the same path.
 - `cache/vite`: Vite's `cacheDir`, which also holds Vitest's results cache (file durations, used to start slow files first). In workspace mode each shared group (one per Vitest copy) has its own folder, `cache/vite/<id>`, where `<id>` is a short hash of the copy's folder relative to the root. `cache/modules` is shared by all groups.
 
-The tool never forces `fsModuleCache` on (Vitest 5.0.5 defaults it to true), and a package that sets it to `false` runs separately. In **single-project mode** the tool overrides your `cacheDir` and `fsModuleCachePath` for its own runs; plain `vitest` runs keep theirs. The first run after adoption starts cold. In workspace mode, a package's own `cacheDir` only affects its Vite pre-bundle cache.
+The tool never forces `fsModuleCache` on (Vitest 5.0.5 defaults it to true), and a package that sets it to `false` runs separately. On Vitest 4 the module cache is experimental (`experimental.fsModuleCache`) and off by default: the tool never turns it on and passes no cache path, so there is no warm module cache. A Vitest 4 package that turns it on still runs in the shared process, and Vitest keeps that cache in its own folder (`node_modules/.experimental-vitest-cache` at the workspace root), not in `.vitest-impact/cache`. In **single-project mode** the tool overrides your `cacheDir` and `fsModuleCachePath` for its own runs; plain `vitest` runs keep theirs. The first run after adoption starts cold. In workspace mode, a package's own `cacheDir` only affects its Vite pre-bundle cache.
 
 The tool never deletes `.vitest-impact/cache`. In CI, restore and save that folder with the cache step of your CI, keyed on lockfiles and config files (leave `node_modules` out of the patterns):
 

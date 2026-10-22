@@ -49,10 +49,10 @@ path first in `setupFiles`.
 
 A test file imports the `vitest` that its package resolves (`test`, `expect`, the runner state behind
 them). The worker that runs the file comes from the Vitest copy that created the shared instance. If the
-two are different copies, results can differ from plain `vitest run`. This happened in a pnpm monorepo
-with 44 packages: pnpm installed six physical copies of Vitest 5.0.5 (peer-dependency variants, each its
-own folder under `node_modules/.pnpm/`), the shared run used the root's copy, and 10 test files that fail
-under plain `vitest run` in their own package passed under the tool.
+two are different copies, results can differ from plain `vitest run`. pnpm can install several physical
+copies of one Vitest version (peer-dependency variants, each its own folder under `node_modules/.pnpm/`).
+When the shared run used the root's copy, test files that fail under plain `vitest run` in their own
+package passed under the tool.
 
 How the tool makes sure of it, in workspace mode:
 
@@ -144,3 +144,29 @@ manager, which sets them itself.
   the user's own `fsModuleCache` value stays (the first run after adoption starts cold; plain `vitest` runs
   keep their own location).
 - The tool never deletes `.vitest-impact/cache`; only `plan.json`, `report.json` and `summary.md` are removed at start.
+
+## Vitest 4 (2026-10-21, Vitest 4.0.18 and 4.1.7)
+
+- The working folder shim and the rest of this record hold: the suite passes on both versions.
+- The module cache is experimental (`experimental.fsModuleCache`, default off, folder
+  `node_modules/.experimental-vitest-cache` at the workspace root), and the CLI rejects `--fsModuleCachePath`.
+  For a Vitest 4 copy the tool passes no cache path, to the shared run or to separate units, and never turns
+  the cache on. `fs-module-cache-off` applies to Vitest 5 only. A package that turns the cache on keeps it on
+  in the shared process (a project's own `experimental.fsModuleCache` wins over the root's).
+- Plugin names: a root `vitest run` on Vitest 4 has a plugin named `vitest`, and a project has only
+  `vitest:project` (Vitest 5 has no plugin named `vitest` in either). Plugins such as vite-plugin-wasm look for
+  that name: without it, vite-plugin-wasm loads a `.wasm` file by a `/@fs/` URL that fails in Node, so files
+  that pass with plain `vitest run` failed in the shared process. So a
+  Vitest 4 package is an inline project that extends its config file (root: the file's folder) and adds a
+  plugin named `vitest`. That plugin also keeps what Vitest gives a file project and not an inline one: the
+  name (from the folder's `package.json`, else the folder name; an inline project is named after its index)
+  and the config's `test.tags` (Vitest 4.1 sets an inline project's tags to the inline ones). It runs after the
+  package's own plugins (`enforce: 'post'`), so a name or tags a package plugin sets in a `config` hook are kept.
+  Known gap: tags that a package plugin sets in `configResolved` are lost on Vitest 4.1. The module cache stays
+  on or off as before; its key now holds the plugin name `vitest` (Vitest 4.1 leaves only its own inline
+  `vitest:tags` plugin out of the key).
+- There is no `providedOptions`: Vitest 4 leaves `maxWorkers` unset unless a config sets it, so a set value
+  is the package's own limit.
+- A global teardown that throws: Vitest 4.1 only logs it (its own `vitest run` exits 0), and Vitest 4.0 rejects
+  `close()` (the tool reports an incomplete run, exit 2; its own `vitest run` exits 1). The tool keeps
+  Vitest's status and adds none of its own.

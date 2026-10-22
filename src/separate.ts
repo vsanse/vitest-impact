@@ -20,8 +20,11 @@ export function packageManager(root: string): 'pnpm' | 'yarn' | 'npm' {
   return 'npm'
 }
 
-/** A test that failed on its own timeout or on a per-test hook's. Vitest's JSON report holds the stack, which starts with "Error: ". */
-export const TIMED_OUT = /(?:^|Error: )(Test|Hook) timed out in \d+ms/
+/**
+ * A test that failed on its own timeout or on a per-test hook's. Vitest's JSON report holds the stack, which starts with "Error: ".
+ * Vitest 4 leaves its placeholder message in a timeout's stack, so its JSON report shows "Error: STACK_TRACE_ERROR" instead.
+ */
+export const TIMED_OUT = /(?:^|Error: )(Test|Hook) timed out in \d+ms|^Error: STACK_TRACE_ERROR\n/
 
 interface JsonReport { testResults?: { name: string; status: string; startTime: number; endTime: number; assertionResults?: { status: string; fullName?: string; title?: string; ancestorTitles?: string[]; failureMessages?: string[] }[] }[] }
 
@@ -95,12 +98,14 @@ export async function runSeparate(root: string, unit: SeparateUnit, maxWorkers: 
   } else {
     const require = createRequire(resolve(cwd, 'package.json'))
     const pkgFile = require.resolve('vitest/package.json')
-    const bin = (JSON.parse(await readFile(pkgFile, 'utf8')) as { bin: string | Record<string, string> }).bin
+    const { bin, version } = JSON.parse(await readFile(pkgFile, 'utf8')) as { bin: string | Record<string, string>; version: string }
     const vitestBin = resolve(dirname(pkgFile), typeof bin === 'string' ? bin : bin.vitest!)
+    // Vitest 4 has no such flag: its module cache is experimental and stays as the package sets it.
+    const cache = parseInt(version) === 5 ? [`--fsModuleCachePath=${resolve(root, '.vitest-impact', 'cache', 'modules')}`] : []
     await mkdir(outDir, { recursive: true })
     const out = resolve(outDir, `${encodeURIComponent(unit.package)}.json`)
     await rm(out, { force: true })
-    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--allowOnly=false', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, `--fsModuleCachePath=${resolve(root, '.vitest-impact', 'cache', 'modules')}`, ...unit.files], cwd, { ...startEnv, ...packageEnv(root, unit.dir) }))
+    exitCode = note(await exec(process.execPath, [vitestBin, 'run', '--allowOnly=false', '--reporter=default', '--reporter=json', `--outputFile.json=${out}`, `--maxWorkers=${maxWorkers}`, ...cache, ...unit.files], cwd, { ...startEnv, ...packageEnv(root, unit.dir) }))
     // No usable report: the planned files become missingFiles, and the cause is recorded.
     let text: string | null = null
     try { text = await readFile(out, 'utf8') } catch { errors.push(`${unit.package}: no JSON report`) }
