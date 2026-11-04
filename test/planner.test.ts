@@ -57,6 +57,16 @@ describe('selection contract', () => {
     const result = await plan([{ path: 'src/math.ts', status: 'M' }], {}, async () => { throw new Error('resolution failed') })
     expect(result.mode).toBe('full')
   })
+  test('an unknown project-qualified ID broadens execution rather than matching by file', async () => {
+    const result = await selectTests({
+      tests: ['alpha', 'beta'].map(project => ({ id: `${project}:shared`, file: 'test/shared.test.ts', project })),
+      git: { head: 'head', base: 'base', changes: [{ path: 'src/math.ts', status: 'M' }], fallback: null },
+      config: parseConfig(configuration), related: async () => ['unknown:shared'],
+    })
+    expect(result.mode).toBe('full')
+    expect(result.fallbackReasons).toEqual(['native-analysis-failed: Native selection returned an unknown test specification'])
+    expect(result.decisions.filter(t => t.selected).map(t => t.project)).toEqual(['alpha', 'beta'])
+  })
   test('native empty result for source changes does not silently pass', async () => {
     expect((await plan([{ path: 'src/orphan.ts', status: 'M' }], {}, async () => [])).mode).toBe('full')
   })

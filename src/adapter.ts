@@ -63,7 +63,7 @@ function projectEntry(file: string, major: number) {
   return { extends: file, root: dirname(file), plugins: [plugin] }
 }
 
-/** One Vitest instance: the packages that resolve one physical Vitest copy (or the single project). */
+/** One Vitest instance: the packages that resolve one physical Vitest copy, or the root projects. */
 interface Group { context: Vitest; specs: TestSpecification[]; vitest: string; members: WorkspacePackage[] }
 /** What the groups of one run find about their packages. */
 interface Found {
@@ -171,7 +171,6 @@ export class VitestAdapter {
       ...(major === 5 ? { experimental: { recordDependencies: false } } : {}),
     }, overrides)
     try {
-      if (!packages && context.projects.length !== 1) throw new Error('A root Vitest config with several projects (test.projects) is not supported yet. Run each project separately with an outer concurrency budget.')
       const cfg = context.config
       if (cfg.changed || cfg.related || cfg.shard || cfg.testNamePattern || cfg.tagsFilter?.length || cfg.project?.length) {
         throw new Error('Remove Vitest changed/related/shard/project/name/tag filters: vitest-impact must discover the entire configured suite.')
@@ -181,21 +180,27 @@ export class VitestAdapter {
       }
       const { owners, reasons, coverage, limits } = found
       if (!packages) {
-        const project = context.projects[0]!
-        if (!['forks', 'threads'].includes(String(project.config.pool)) || project.config.browser.enabled || project.config.typecheck.enabled) {
-          throw new Error('MVP supports Node forks/threads pools only (including jsdom/happy-dom). Browser, VM/custom pools, and typecheck suites are not yet supported.')
+        for (const project of context.projects) {
+          if (!['forks', 'threads'].includes(String(project.config.pool)) || project.config.browser.enabled || project.config.typecheck.enabled) {
+            throw new Error('MVP supports Node forks/threads pools only (including jsdom/happy-dom). Browser, VM/custom pools, and typecheck suites are not yet supported.')
+          }
         }
         // Cap native concurrency; never override a user's stricter serial/worker setting.
         // Vitest's default (CPU count minus one) is not a user setting: as in workspace mode, it is replaced.
         const userSet = (c: { maxWorkers: number } & Untyped) => setsWorkers(c) || c.fileParallelism === false
-        const configuredLimit = Math.min(...[cfg, project.config].filter(userSet).map(c => c.maxWorkers), Infinity)
+        const budgetConfigs = context.projects.length === 1 ? [cfg, context.projects[0]!.config] : [cfg]
+        const configuredLimit = Math.min(...budgetConfigs.filter(userSet).map(c => c.maxWorkers), Infinity)
         if (configuredLimit < budget.maxWorkers) {
           budget.warnings.push(`Preserved Vitest's stricter ${configuredLimit}-worker limit.`)
           budget.maxWorkers = configuredLimit
         }
         cfg.maxWorkers = budget.maxWorkers
-        project.config.maxWorkers = budget.maxWorkers
-        project.config.allowOnly = false
+        for (const project of context.projects) {
+          const limit = userSet(project.config) ? Math.min(project.config.maxWorkers, budget.maxWorkers) : budget.maxWorkers
+          if (limit < budget.maxWorkers) budget.warnings.push(`Kept ${project.name}'s ${limit}-worker limit.`)
+          project.config.maxWorkers = limit
+          project.config.allowOnly = false
+        }
       } else {
         // Vitest gives every project the root coverage and the CLI passWithNoTests, so read both from the package's own config.
         const vite = await import(pathToFileURL(require.resolve('vite')).href) as ViteLoader
@@ -234,8 +239,11 @@ export class VitestAdapter {
           project.config.env = { ...packageEnv(root, owner.dir), ...project.config.env, VITEST_IMPACT_CWD: resolve(root, owner.dir) }
           project.config.setupFiles = [shim, ...project.config.setupFiles]
         }
-        // Vitest runs one sequence.groupOrder at a time and needs one maxWorkers value per group:
-        // give each (groupOrder, maxWorkers) pair its own group, keeping the configured order.
+      }
+      // Vitest needs one maxWorkers value per sequence.groupOrder. Keep configured order
+      // while splitting groups whose projects retain different worker limits.
+      if (packages || context.projects.length > 1) {
+        const shared = context.projects.filter(project => !packages || !reasons.has(owners.get(project)!))
         let group = -1
         let previous = ''
         for (const project of [...shared].sort((a, b) => a.config.sequence.groupOrder - b.config.sequence.groupOrder || b.config.maxWorkers - a.config.maxWorkers)) {

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Root Vitest configurations can run multiple projects, preserving project-qualified selections, per-project configuration and stricter worker limits.
+
 ## 0.3.0
 
 - Vitest 4 support: Vitest 4.0.18 and later run, in full mode and with selection. Packages on Vitest 4 and Vitest 5 copies run in one invocation, one shared process per copy.

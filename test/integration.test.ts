@@ -219,12 +219,54 @@ test("a single project that sets no maxWorkers gets the budget, not Vitest's def
   expect(run.plan.resources.warnings.join(' ')).not.toContain('Preserved')
 })
 
-test('a root Vitest config with several projects is refused with a message that says so', async () => {
+test('root projects keep file identity, configuration and worker limits during selection', async () => {
+  const { root } = await fixture({ resources: { maxWorkers: 2, workerMemoryMb: 128, reserveMemoryMb: 128 } })
+  await put(root, 'src/alpha.ts', "export const value = 'alpha'\n")
+  await put(root, 'src/beta.ts', "export const value = 'beta'\n")
+  const shared = "import { test, expect } from 'vitest'; import { value } from '@value'; test('project alias and environment', () => expect(value).toBe(process.env.EXPECTED))\n"
+  await put(root, 'test/shared.test.ts', shared)
+  await put(root, 'vitest.config.ts', `
+    import { defineConfig } from 'vitest/config'
+    import { fileURLToPath } from 'node:url'
+    export default defineConfig({ test: { projects: ['alpha', 'beta'].map((name, index) => ({
+      resolve: { alias: { '@value': fileURLToPath(new URL('./src/' + name + '.ts', import.meta.url)) } },
+      test: { name, include: ['test/shared.test.ts'], env: { EXPECTED: name }, maxWorkers: index + 1, isolate: false },
+    })) } })
+  `)
+  await git(root, 'add', '.')
+  await git(root, '-c', 'user.name=Tests', '-c', 'user.email=tests@example.invalid', 'commit', '-qm', 'root projects')
+  const base = await git(root, 'rev-parse', 'HEAD')
+  const full = await invoke(root, ['run', '--vitest-config', 'vitest.config.ts', '--mode', 'full'])
+  expect(full.code, full.output).toBe(0)
+  expect(full.plan.resources.maxWorkers).toBe(2)
+  expect(full.plan.resources.warnings).toContain("Kept alpha's 1-worker limit.")
+  expect(full.report.executed.map(t => t.project).sort()).toEqual(['alpha', 'beta'])
+  expect(new Set(full.report.executed.map(t => t.id)).size).toBe(2)
+  expect(full.report.executed.every(t => t.file === 'test/shared.test.ts')).toBe(true)
+  expect(full.report.missingFiles).toEqual([])
+  expect(full.report.unexpectedFiles).toEqual([])
+
+  await put(root, 'src/alpha.ts', "export const value: string = 'alpha'\n")
+  const selected = await invoke(root, ['run', '--vitest-config', 'vitest.config.ts', '--base', base, '--mode', 'selected'])
+  expect(selected.code, selected.output).toBe(0)
+  expect(selected.plan.fallbackReasons).toEqual([])
+  expect(selected.plan.decisions).toHaveLength(2)
+  expect(selected.report.executed.map(t => [t.project, t.file])).toEqual([['alpha', 'test/shared.test.ts']])
+  expect(selected.report.missingFiles).toEqual([])
+  expect(selected.report.unexpectedFiles).toEqual([])
+
+  await put(root, 'test/shared.test.ts', shared + '\n')
+  const changedTest = await invoke(root, ['run', '--vitest-config', 'vitest.config.ts', '--base', base, '--mode', 'selected'])
+  expect(changedTest.code, changedTest.output).toBe(0)
+  expect(changedTest.report.executed.map(t => t.project).sort()).toEqual(['alpha', 'beta'])
+})
+
+test('an unsupported pool in any root project is rejected', async () => {
   const { root } = await fixture()
-  await put(root, 'vitest.config.ts', "import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { projects: [{ test: { name: 'one', include: ['test/math.test.ts'] } }, { test: { name: 'two', include: ['test/strings.test.ts'] } }] } })\n")
+  await put(root, 'vitest.config.ts', "export default { test: { projects: [{ test: { name: 'one', include: ['test/math.test.ts'] } }, { test: { name: 'two', include: ['test/strings.test.ts'], pool: 'vmThreads' } }] } }\n")
   const run = await invoke(root, ['plan', '--vitest-config', 'vitest.config.ts'])
   expect(run.code).toBe(2)
-  expect(run.output).toContain('A root Vitest config with several projects (test.projects) is not supported yet.')
+  expect(run.output).toContain('MVP supports Node forks/threads pools only')
 })
 
 test('the plan carries the package version and no outdated cache warning', async () => {

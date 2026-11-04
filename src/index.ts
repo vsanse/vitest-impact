@@ -167,7 +167,7 @@ async function executeLocked(options: Options): Promise<{ plan: Plan; report?: R
   } finally { await adapter?.close() }
 }
 
-/** All workspace packages and those with tests after --filter, or null for today's single-project run (no workspace, or --vitest-config). */
+/** All workspace packages and those with tests after --filter, or null for a root-config run (no workspace, or --vitest-config). */
 async function workspacePackages(root: string, options: Options, isolated: string[]): Promise<{ found: WorkspacePackage[]; packages: WorkspacePackage[] } | null> {
   const filters = options.filters ?? []
   if (options.vitestConfig) {
@@ -185,7 +185,7 @@ async function workspacePackages(root: string, options: Options, isolated: strin
   const packages = filterPackages(found, filters)
   if (!packages.length) {
     throw new Error(filters.length ? 'No package with tests matches the filters'
-      : 'No workspace package has a Vitest test script. --vitest-config runs a root Vitest config with one project; a root config with several projects (test.projects) is not supported yet.')
+      : 'No workspace package has a Vitest test script. Use --vitest-config to run a root Vitest config.')
   }
   return { found, packages }
 }
